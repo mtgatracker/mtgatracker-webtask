@@ -67,3 +67,7 @@ __pycache__
 
 secret*
 **/secret*
+.pytest_cache
+pytest_report.html
+test_report.html
+on_demand/compiled
