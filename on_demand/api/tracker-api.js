@@ -16,6 +16,7 @@ const {
   random6DigitCode,
   routeDoc,
   sendDiscordMessage,
+  collectionCollection,
   gameCollection,
   deckCollection,
   draftCollection,
@@ -305,6 +306,54 @@ router.post('/rankChange', (req, res, next) => {
       result.rankChange = model;
       collection.save(result)
       res.status(200).send(result)
+    })
+  })
+});
+
+
+router.post('/collection', (req, res, next) => {
+  console.log("POST /collection")
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  const model = req.body;
+
+  // some metadata gets added by the tracker; remove everything that isn't a card count
+  // we know hero is fine because this route is protected by ID verifying middleware, safe to throw away hero
+  delete model.hero
+  delete model.block_title
+  delete model.request_or_response
+  delete model.block_title_sequence
+
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    if (err) return next(err);
+    let collection = client.db(DATABASE).collection(collectionCollection)
+    // lol, say it 5 times fast
+
+    let cursor = collection.find({"owner": req.user.user}).sort({date: -1}).limit(1).next((err, result) => {
+      if (err) return next(err);
+      // TODO, gh issue #2: this if doesn't appear to be working, but
+      // debugging is difficult because objects are so large. shrug, minor extra load on the DB I guess
+      if (result && result.collection == model) {
+        console.log("model already matches, 304")
+        res.status(304).send({error: "player collection unmodified"});
+        return;
+      } else {
+        console.log(result.collection)
+      }
+
+      // at this point, either collection doesn't match, or doesn't exist
+      // check for latter, if so, set up object boilerplate
+      if (result == null) {
+        result = {
+          owner: req.user.user,
+          collection: {}
+        }
+      }
+      // update the collection, either way
+      result.collection = model
+      // save it
+      collection.save(result).then(saveResult => {
+        res.status(200).send(saveResult)
+      })
     })
   })
 });

@@ -126,13 +126,16 @@ function userTokenMatchesData(req, res, next) {
   if (req.originalUrl.endsWith("tracker-api/")) return next()
   const model = req.body;
   if (model.hero) {
+    console.log(`validating token based on hero: ${model.hero}`)
     if (model.hero == req.user.user) return next()
-    return res.status(400).send({"error": "bad_auth"})
   } else if(model.players) {
+    console.log(`validating token based on model.player[0].name: ${model.players[0].name}`)
     if (model.players[0].name == req.user.user) return next()
   } else {
     return res.status(400).send({"error": "bad_format"})
   }
+  console.log(`hero / player does not match, 400!`)
+  return res.status(400).send({"error": "bad_auth"})
 }
 
 server.use('/public-api', publicAPI)

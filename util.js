@@ -374,6 +374,7 @@ module.exports = {
   routeDoc: routeDoc,
   deckCollection: deckCollection,
   gameCollection: gameCollection,
+  collectionCollection: collectionCollection,
   userCollection: userCollection,
   errorCollection: errorCollection,
   inventoryCollection: inventoryCollection,
