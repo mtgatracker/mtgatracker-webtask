@@ -1,6 +1,9 @@
 'use latest';
 
 const express = require('express'),
+      request = require('request'),
+      jwt = require('jsonwebtoken'),
+      crypto = require('crypto'),
       router = express.Router();
 const { MongoClient, ObjectID } = require('mongodb');
 const {
@@ -10,8 +13,16 @@ const {
   routeDoc,
   sendDiscordMessage,
   userCollection,
+  trackerCollection,
   notificationCollection,
+  verifyAndDecodeToken,
+  getTwitchIDToken,
+  getDiscordAccessToken,
+  verifyDiscordAccessToken,
+  generateInternalToken,
+  getOrCreateUser,
 } = require('../../util')
+
 
 var secrets; // babel makes it so we can't const this, I am pretty sure
 //try {
@@ -185,6 +196,83 @@ router.post('/auth-request/long-exp/', (req, res, next) => {
         })
       }
     })
+  })
+})
+
+router.post('/tracker-token/', (req, res, next) => {
+  console.log('/tracker-token/')
+  const authRequest = req.body;
+
+  let { trackerID } = authRequest;
+  const { MONGO_URL, DATABASE, TRACKER_HASH_SECRET } = req.webtaskContext.secrets;
+
+  MongoClient.connect(MONGO_URL, (connectErr, client) => {
+    let trackers = client.db(DATABASE).collection(trackerCollection);
+    let trackerSearch = {trackerID: trackerID}
+
+    trackers.findOne(trackerSearch, null, (err, result) => {
+      if (result === undefined || result === null) {
+        // need to make a tracker object
+        let trackerIDHash = crypto.createHash('sha256').update(trackerID + TRACKER_HASH_SECRET).digest('hex')
+        result = {
+          trackerID: trackerID,
+          trackerIDHash: trackerIDHash,
+        }
+        trackers.save(result)
+      }
+
+      let token = createToken(result, req.webtaskContext.secrets.JWT_SECRET, "1y")
+      res.status(200).send({token: token})
+    })
+  })
+})
+
+router.post('/twitch-auth-attempt', (req, res, next) => {
+  console.log('/twitch-auth-attempt')
+  let { code } = req.body;
+  let { MONGO_URL, TWITCH_CLIENT_ID, TWITCH_SECRET_ID, DATABASE } = req.webtaskContext.secrets
+  MongoClient.connect(MONGO_URL).then(dbClient => {
+    options = {
+      db: dbClient.db(DATABASE),
+      client_id: TWITCH_CLIENT_ID,
+      client_secret: TWITCH_SECRET_ID,
+      accessCode: code
+    }
+    getTwitchIDToken(options)
+      .then(verifyAndDecodeToken)
+      .then(getOrCreateUser)
+      .then(decodedObj => {
+        res.status(200).send({token: decodedObj.id_token, decoded: decodedObj.decoded})
+      }).catch(err => {
+        // TODO: clean this up a bit
+        res.status(500).send({"error": err})
+      })
+  })
+})
+
+router.post('/discord-auth-attempt', (req, res, next) => {
+  console.log('/discord-auth-attempt')
+  let { code } = req.body;
+  let { MONGO_URL, DISCORD_CLIENT_ID, DISCORD_SECRET_ID, DATABASE, JWT_SECRET } = req.webtaskContext.secrets
+  MongoClient.connect(MONGO_URL).then(dbClient => {
+    options = {
+      db: dbClient.db(DATABASE),
+      client_id: DISCORD_CLIENT_ID,
+      client_secret: DISCORD_SECRET_ID,
+      jwtSecret: JWT_SECRET,
+      accessCode: code,
+    }
+    getDiscordAccessToken(options)
+      .then(verifyDiscordAccessToken)
+      // discord doesn't support openID tokens :( we have to make one ourselves
+      .then(generateInternalToken)
+      .then(getOrCreateUser)
+      .then(decodedObj => {
+        res.status(200).send({token: decodedObj.id_token, decoded: decodedObj.decoded})
+      }).catch(err => {
+        // TODO: clean this up a bit
+        res.status(500).send({"error": err})
+      })
   })
 })
 

@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken')
 const BluebirdPromise = require('bluebird')
 const request = require('request');
 const backbone = require('backbone');
+const jwksRsa = require('jwks-rsa');
 
 var secrets;
 //try {
@@ -62,6 +63,7 @@ const deckCollection = 'deck',
       inventoryCollection = 'inventory',
       collectionCollection = 'collection',
       userCollection = 'user',
+      trackerCollection = 'tracker',
       notificationCollection = 'tracker-notification',
       errorCollection = 'error';
 
@@ -83,6 +85,7 @@ let random6DigitCode = () => {
 }
 
 let createToken = (tokenData, jwtSecret, expiresIn) => {
+  tokenData.iss = "https://inspector.mtgatracker.com"  // tell them we issued it
   return jwt.sign(tokenData, jwtSecret, {expiresIn: expiresIn})
 }
 
@@ -160,7 +163,6 @@ let sendDiscordMessage = (message, webhook_url, silent) => {
 
 let getGameById = (client, database, gameID, callback) => {
   return new Promise((resolve, reject) => {
-    console.log("getGameById " +  gameID)
     client.db(database).collection(gameCollection).findOne({ gameID: gameID }, null, function(err, result) {
       if (err) { reject() } else { resolve() }
       callback(result, err)
@@ -272,50 +274,6 @@ let randomString = () => {
   return Math.random().toString(36).substr(2, 5) + Math.random().toString(36).substr(2, 5) + Math.random().toString(36).substr(2, 5)
 }
 
-let getPublicName = (client, database, username, createIfDoesntExist, isUser) => {
-  console.log("getPublicName")
-  if (createIfDoesntExist === undefined) {
-    createIfDoesntExist = false;
-  }
-  if (isUser === undefined) {
-    isUser = false;
-  }
-  return new Promise((resolve, reject) => {
-    client.db(database).collection(userCollection).findOne({username: username}, null, function(err, result) {
-      if (!createIfDoesntExist || result) {
-        if (isUser) {
-          result.isUser = true;
-          client.db(database).collection(userCollection).save(result)
-        }
-        resolve({error: err, result: result})
-      } else {
-        // we need to make one if there isn't one available
-        client.db(database).collection(userCollection).findOne({available: true}, null, (err, result) => {
-          if (result) {
-            result.available = false
-            result.username = username
-            result.isUser = (isUser ? true : false);  // filter out any weird values that come in
-            client.db(database).collection(userCollection).save(result)
-            resolve({err: null, result: result})
-          } else {
-            // handle case where there are none available
-            let pubname = randomString()
-            let newResult = {
-              available: false,
-              username: username,
-              publicName: pubname,
-              isUser: (isUser ? true : false)
-            }
-            client.db(database).collection(userCollection).insertOne(newResult, null, (err, result) => {
-              resolve({err: null, result: result})
-            })
-          }
-        })
-      }
-    })
-  })
-}
-
 let cleanDraftRecord = (record) => {
   if (record.picks) {
     for (let pick of record.picks) {
@@ -330,8 +288,8 @@ let cleanDraftRecords = (records) => {
   records.forEach(cleanDraftRecord)
 }
 
-let cleanGameRecord = (requestingUser, record) => {
-  if (record.hero && record.hero != requestingUser) {
+let cleanGameRecord = (authorizedTrackers, record) => {
+  if (record.trackerIDHash && !authorizedTrackers.includes(record.trackerIDHash)) {
     record.opponent_owned = true;
     if (record.players) {
       record.players[0].deck.cards = {} // don't leak this info, requester is not authorized to see it
@@ -347,14 +305,182 @@ let cleanGameRecord = (requestingUser, record) => {
 }
 
 let cleanGameRecords = (requestingUser, records) => {
-  console.log("enter root")
   records.forEach(record => {
     cleanGameRecord(requestingUser, record)
   })
 }
 
+
+const twitchJWKClientOptions = {
+  cache: true,
+  rateLimit: true,
+  jwksRequestsPerMinute: 10,
+  jwksUri: 'https://id.twitch.tv/oauth2/keys'
+}
+
+const twitchJWKClient = jwksRsa(twitchJWKClientOptions)
+// I wish we could reuse twitchJWKClient, but since they are only used in separate flows, the rate-limiting isn't
+// going to help us here anyways.
+const twitchJWKExpressSecret = jwksRsa.expressJwtSecret(twitchJWKClientOptions)
+
+let findKeyMiddleware = jwkSet => {
+  return (header, callback) => {
+    jwkSet.getSigningKey(header.kid, function(err, key) {
+      var signingKey = key.publicKey || key.rsaPublicKey;
+      callback(null, signingKey);
+    });
+  }
+}
+
+
+let buildUrl = (url, params) => {
+  return url + "?" + Object.keys(params).map(key => key + "=" + params[key]).join("&")
+}
+
+let getTwitchIDToken = (options) => {
+  let { client_id, client_secret, accessCode } = options
+  // TODO: generalize this somehow (maybe getToken(req, issuer, accessCode) ? )
+  return new Promise((resolve, reject) => {
+    let params = {
+      client_id: client_id,
+      client_secret: client_secret,
+      code: accessCode,
+      grant_type: "authorization_code",
+      redirect_uri: "http://localhost:3000/twitchAuth"
+    }
+    let twitchTokenUrl = buildUrl("https://id.twitch.tv/oauth2/token", params)
+    request.post({
+      url: twitchTokenUrl,
+      json: true,
+      headers: {'User-Agent': 'MTGATracker-Webtask'}
+    }, (err, reqRes, data) => {
+      if (err) return reject(err)
+      options.id_token = data.id_token
+      options.access_token = data.access_token
+      options.refresh_token = data.refresh_token
+      options.issuer = "twitch"
+      return resolve(options)
+    })
+  })
+}
+
+let verifyAndDecodeToken = (tokenObj) => {
+  let { id_token, issuer } = tokenObj;
+  return new Promise((resolve, reject) => {
+    // TODO: make this a bit more resilient to things like verifyAndDecodeKey(key, 'twithc') typos and such
+    let keySet;
+    // TODO: this is only for twitch, remove this conditional
+    if (issuer == "twitch") {
+      keySet = twitchJWKClient;
+    } else {
+      return reject(`no matching keyset for issuer ${issuer}`)
+    }
+    jwt.verify(id_token, findKeyMiddleware(keySet), (err, decoded) => {
+      if (err) {
+        return reject(err)
+      } else {
+        tokenObj.decoded = decoded;
+        return resolve(tokenObj)
+      }
+    })
+  })
+}
+
+let getDiscordAccessToken = (options) => {
+  let { client_id, client_secret, accessCode } = options
+  // TODO: generalize this somehow (maybe getToken(req, issuer, accessCode) ? )
+  return new Promise((resolve, reject) => {
+    let params = {
+      client_id: client_id,
+      client_secret: client_secret,
+      code: accessCode,
+      grant_type: "authorization_code",
+      scope: "identify",
+      redirect_uri: "http://localhost:3000/discordAuth"
+    }
+    let discordTokenUrl = buildUrl("https://discordapp.com/api/oauth2/token", params)
+    request.post({
+      url: discordTokenUrl,
+      json: true,
+      headers: {'User-Agent': 'MTGATracker-Webtask'},
+    }, (err, reqRes, data) => {
+      if (err) return reject(err)
+      options.id_token = data.id_token
+      options.access_token = data.access_token
+      options.refresh_token = data.refresh_token
+      options.issuer = "discord"
+      return resolve(options)
+    })
+  })
+}
+
+let verifyDiscordAccessToken = (tokenObj) => {
+  return new Promise((resolve, reject) => {
+    let { access_token, issuer } = tokenObj;
+    let discordUserUrl = "https://discordapp.com/api/users/@me"
+    request.get({
+      url: discordUserUrl,
+      headers: {
+        'Authorization': `Bearer ${access_token}`
+      },
+      json: true
+    }, (err, reqRes, data) => {
+      if (err) {
+        return reject(err)
+      } else {
+        tokenObj.discordUser = data
+        return resolve(tokenObj)
+      }
+    })
+  })
+}
+
+let generateInternalToken = options => {
+  return new Promise((resolve, reject) => {
+     options.decoded = {preferred_username: options.discordUser.username, sub: options.discordUser.id}
+     if (options.issuer) {
+       options.decoded.proxyFor = options.issuer;
+     }
+     options.id_token = createToken(options.decoded, options.jwtSecret, "7d")
+     resolve(options)
+  })
+}
+
+let getOrCreateUser = options => {
+  return new Promise((resolve, reject) => {
+    let { access_token, refresh_token, decoded, issuer, db, id_token } = options;
+    let { preferred_username, sub } = decoded;
+
+    let userKey = `${sub}:${issuer}`
+    let collection = db.collection(userCollection)
+
+    return collection.findOne({userKey: userKey}, null).then(findResult => {
+      if (findResult) {
+        options.user = findResult;
+        resolve(options)
+      } else {
+        // make a new result we can save
+        let result = {
+          userKey: userKey,
+          username: preferred_username,
+          isUser: true,
+          hiddenDecks: [],
+          authorizedTrackers: [],
+          accessToken: access_token,
+          refreshToken: refresh_token,
+          issuer: issuer,
+          idToken: id_token,
+        }
+        collection.save(result).then(saveResult => {
+          options.user = result;
+          resolve(options)
+        })
+      }
+    })
+  })
+}
+
 module.exports = {
-  getPublicName: getPublicName,
   randomString: randomString,
   clientVersionUpToDate: clientVersionUpToDate,
   getGithubStats: getGithubStats,
@@ -375,6 +501,7 @@ module.exports = {
   deckCollection: deckCollection,
   gameCollection: gameCollection,
   userCollection: userCollection,
+  trackerCollection: trackerCollection,
   errorCollection: errorCollection,
   inventoryCollection: inventoryCollection,
   draftCollection: draftCollection,
@@ -382,4 +509,11 @@ module.exports = {
   DraftPick: DraftPick,
   createDeckFilter: createDeckFilter,
   notificationCollection: notificationCollection,
+  verifyAndDecodeToken: verifyAndDecodeToken,
+  getTwitchIDToken: getTwitchIDToken,
+  getDiscordAccessToken: getDiscordAccessToken,
+  verifyDiscordAccessToken: verifyDiscordAccessToken,
+  generateInternalToken: generateInternalToken,
+  getOrCreateUser: getOrCreateUser,
+  twitchJWKExpressSecret: twitchJWKExpressSecret,
 }

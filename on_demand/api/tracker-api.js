@@ -9,7 +9,6 @@ const {
   createAnonymousToken,
   createToken,
   clientVersionUpToDate,
-  getPublicName,
   getGameById,
   DraftPick,
   Game,
@@ -19,7 +18,6 @@ const {
   gameCollection,
   deckCollection,
   draftCollection,
-  userCollection,
   inventoryCollection,
   notificationCollection,
 } = require('../../util')
@@ -41,6 +39,7 @@ router.post("/draft-pick", (req, res, next) => {
   const model = req.body;
   let hero = model.hero;
   let draftID = model.draftID;
+  let trackerIDHash = model.trackerIDHash;
 
   let draftPick = new DraftPick(model)
   if (!draftPick.isValid()) {
@@ -49,15 +48,17 @@ router.post("/draft-pick", (req, res, next) => {
   }
   delete model.hero;
   delete model.draftID;
+  delete model.trackerIDHash;
 
   MongoClient.connect(MONGO_URL, (err, client) => {
     if (err) return next(err);
     client.db(DATABASE).collection(draftCollection)
-      .find({hero: hero, draftID: draftID})
+      .find({hero: hero, draftID: draftID, trackerIDHash: trackerIDHash})
       .sort({date: -1}).limit(1)
       .next((err, draftObj) => {
         // decide if we should use existing, or create new object
-        let lastPick = draftObj.picks[draftObj.picks.length - 1]
+        let lastPick = {packNumber: 1000, pickNumber: 1000}; // if no object to pull, feed fake data that will fail
+        if (draftObj && draftObj.picks) lastPick = draftObj.picks[draftObj.picks.length - 1]
         let fitsExistingDraft = draftObj &&
           (
             lastPick.packNumber < model.packNumber ||
@@ -68,24 +69,12 @@ router.post("/draft-pick", (req, res, next) => {
           )
         if (fitsExistingDraft) {
           draftObj.picks.push(model)
-          console.log("fits!")
-          console.log(draftObj)
-          console.log(`pack: ${lastPick.packNumber} <= ${model.packNumber}: ${lastPick.packNumber <= model.packNumber}`)
-          console.log(`pick: ${lastPick.pickNumber} <= ${model.pickNumber}: ${lastPick.pickNumber <= model.pickNumber}`)
 
           client.db(DATABASE).collection(draftCollection).save(draftObj, (err, result) => {
             client.close();
             res.status(201).send(result);
           })
         } else {
-          console.log("no fit :(")
-          if (draftObj) {
-            console.log(`pack: ${lastPick.packNumber} <= ${model.packNumber}: ${lastPick.packNumber <= model.packNumber}`)
-            console.log(`pick: ${lastPick.pickNumber} <= ${model.pickNumber}: ${lastPick.pickNumber <= model.pickNumber}`)
-          } else {
-            console.log("because: no draftObj")
-          }
-
           if (lastPick.packNumber == model.packNumber &&
               lastPick.pickNumber == model.pickNumber &&
               lastPick.pack == model.pack) {
@@ -93,12 +82,12 @@ router.post("/draft-pick", (req, res, next) => {
                 client.close();
                 res.status(304).send(lastPick);
           } else {
-            console.log({hero: hero, draftID: draftID})
             draftObj = {
               date: new Date(),
               picks: [model],
               hero: hero,
               draftID: draftID,
+              trackerIDHash: trackerIDHash,
             }
             client.db(DATABASE).collection(draftCollection).insertOne(draftObj, (err, result) => {
               client.close();
@@ -110,10 +99,9 @@ router.post("/draft-pick", (req, res, next) => {
   })
 })
 
-
-// duplicated from /anon-api
 // covered: test_post_game
 router.post('/game', (req, res, next) => {
+  console.log("POST /game")
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   const model = req.body;
 
@@ -148,6 +136,7 @@ router.post('/game', (req, res, next) => {
       model.clientVersionOK = clientVersionCheck.ok
       model.latestVersionAtPost = clientVersionCheck.latest
       model.trackerAuthed = true
+      model.trackerIDHash = req.user.trackerIDHash
 
       if (model.hero === undefined || model.opponent === undefined) {
         if (model.players[0].deck.poolName.includes("visible cards") && !model.players[1].deck.poolName.includes("visible cards")) {
@@ -184,39 +173,36 @@ router.post('/game', (req, res, next) => {
       MongoClient.connect(MONGO_URL, (err, client) => {
         if (err) return next(err);
         //client, database, username, createIfDoesntExist, isUser
-        getPublicName(client, DATABASE, model.hero, true, true).then(() => {
-          getPublicName(client, DATABASE, model.opponent, true, false).then(() => {
-            getGameById(client, DATABASE, game.get("gameID"), (result, err) => {
-              if (result !== null) {
-                res.status(400).send({error: "game already exists", game: result});
-                return;
+        getGameById(client, DATABASE, game.get("gameID"), (result, err) => {
+          if (result !== null) {
+            res.status(400).send({error: "game already exists", game: result});
+            return;
+          }
+          client.db(DATABASE).collection(gameCollection).insertOne(model, (err, result) => {
+            let deckQuery = {owner: model.hero, deckID: model.players[0].deck.deckID, trackerIDHash: model.trackerIDHash}
+            client.db(DATABASE).collection(deckCollection).find(deckQuery).limit(1).next((err, result) => {
+              if (err) return next(err);
+              if (result == null) { // new deck, we need to make the record
+                result = {
+                  owner: model.hero,
+                  deckID: model.players[0].deck.deckID,
+                  deckName: model.players[0].deck.poolName,
+                  wins: [],
+                  losses: [],
+                  trackerIDHash: model.trackerIDHash
+                }
               }
-              client.db(DATABASE).collection(gameCollection).insertOne(model, (err, result) => {
-                let deckQuery = {owner: model.hero, deckID: model.players[0].deck.deckID}
-                client.db(DATABASE).collection(deckCollection).find(deckQuery).limit(1).next((err, result) => {
-                  if (err) return next(err);
-                  if (result == null) { // new deck, we need to make the record
-                    result = {
-                      owner: model.hero,
-                      deckID: model.players[0].deck.deckID,
-                      deckName: model.players[0].deck.poolName,
-                      wins: [],
-                      losses: []
-                    }
-                  }
-                  result.deckName = model.players[0].deck.poolName  // get the latest name
-                  if (model.winner == model.hero) {
-                    result.wins.push(model.gameID)
-                  } else {
-                    result.losses.push(model.gameID)
-                  }
-                  client.db(DATABASE).collection(deckCollection).save(result)
-                  client.close();
-                  res.status(201).send(result);
-                })
-              });
+              result.deckName = model.players[0].deck.poolName  // get the latest name
+              if (model.winner == model.hero) {
+                result.wins.push(model.gameID)
+              } else {
+                result.losses.push(model.gameID)
+              }
+              client.db(DATABASE).collection(deckCollection).save(result)
+              client.close();
+              res.status(201).send(result);
             })
-          })
+          });
         })
       });
     })
@@ -249,14 +235,14 @@ router.post('/inventory', (req, res, next) => {
     Object.keys(model).forEach(key => {
       if (key != "playerId") {
         queries.push(key)
-        queryPromises.push(collection.find({"playerId": model.playerId, "type": key}).sort({date: -1}).limit(1).next())
+        queryPromises.push(collection.find({"playerId": model.playerId, "type": key, trackerIDHash: req.user.trackerIDHash}).sort({date: -1}).limit(1).next())
       }
     })
     Promise.all(queryPromises).then(qPromiseResults => {
       for (let i = 0; i < queries.length; i++) {
         let key = queries[i]
         let result = qPromiseResults[i]
-        let modelForKey = {"type": key, "value": model[key], "playerId": model.playerId}
+        let modelForKey = {"type": key, "value": model[key], "playerId": model.playerId, trackerIDHash: req.user.trackerIDHash}
 
         // incoming model won't have these fields
         // we're not using result again, so we can edit the obj directly
@@ -283,8 +269,8 @@ router.post('/inventory', (req, res, next) => {
   });
 });
 
-
 router.post('/rankChange', (req, res, next) => {
+  console.log("POST /rankChange")
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   const model = req.body;
 
@@ -292,7 +278,7 @@ router.post('/rankChange', (req, res, next) => {
     if (err) return next(err);
     //client, database, username, createIfDoesntExist, isUser
     let collection = client.db(DATABASE).collection(gameCollection)
-    let cursor = collection.find({"players.0.userID": model.playerId}).sort({date: -1}).limit(1).next((err, result) => {
+    let cursor = collection.find({"players.0.userID": model.playerId, trackerIDHash: req.user.trackerIDHash}).sort({date: -1}).limit(1).next((err, result) => {
       if (err) return next(err);
       if (result == null) {
         res.status(400).send({error: "no game found", game: result});

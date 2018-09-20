@@ -6,26 +6,13 @@ const express = require('express'),
 const { cardsColors } = require("mtga")
 
 const {
-  clientVersionUpToDate,
-  createAnonymousToken,
   createDeckFilter,
-  createToken,
   cleanGameRecord,
   cleanGameRecords,
   cleanDraftRecord,
   cleanDraftRecords,
-  differenceMinutes,
-  Game,
-  getCookieToken,
   getGameById,
-  getGithubStats,
-  getPublicName,
-  logError,
-  parseVersionString,
-  random6DigitCode,
-  randomString,
   routeDoc,
-  sendDiscordMessage,
   deckCollection,
   draftCollection,
   gameCollection,
@@ -46,7 +33,6 @@ router.get('/', (req, res, next) => {
   res.status(200).send({routes: routeDoc(router.stack)})
 })
 
-
 // covered: test_get_user_games
 router.get('/games', (req, res, next) => {
   console.log("/api/games" + JSON.stringify(req.params))
@@ -57,7 +43,7 @@ router.get('/games', (req, res, next) => {
   }
   const { page = 1 } = req.query;
   const { user } = req.user;
-  const addFilter = Object.assign({'players.name': user}, createDeckFilter(req.query))
+  const addFilter = Object.assign({trackerIDHash: {$in: req.authorizedTrackers}}, createDeckFilter(req.query))
 
   console.log(`=========================> using filter ${JSON.stringify(addFilter)}`)
 
@@ -72,7 +58,7 @@ router.get('/games', (req, res, next) => {
       let docCursor = cursor.skip((page - 1) * per_page).limit(per_page);
 
       docCursor.toArray((cursorErr, docs) => {
-        cleanGameRecords(user, docs)
+        cleanGameRecords(req.authorizedTrackers, docs)
         if (cursorErr) return next(cursorErr);
         res.status(200).send({
           totalPages: numPages,
@@ -88,9 +74,8 @@ router.get('/games', (req, res, next) => {
 router.get('/deck/:deckID/winloss-colors', (req, res, next) => {
 
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-
   console.log("/deck/winloss-colors" + JSON.stringify(req.params))
-  const { user } = req.user;
+
   let colors = ["White", "Red", "Green", "Blue", "Black"]
   let colorCounts = {}
   colors.forEach(color => {
@@ -100,7 +85,7 @@ router.get('/deck/:deckID/winloss-colors', (req, res, next) => {
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(gameCollection)
-    const addFilter = {'hero': user, 'players.0.deck.deckID': req.params.deckID}
+    const addFilter = {trackerIDHash: {$in: req.authorizedTrackers}, 'players.0.deck.deckID': req.params.deckID}
     let allDeckGames = collection.find(addFilter)
     allDeckGames.toArray((err, gameArray) => {
       let allColorPromises = []
@@ -118,7 +103,7 @@ router.get('/deck/:deckID/winloss-colors', (req, res, next) => {
           colors.forEach(oppoColor => {
             if (oppoColor != "Colorless") {
               colorCounts[oppoColor].total += 1
-              if (game.winner == user)
+              if (game.winner == game.hero)
                 colorCounts[oppoColor].wins += 1
             }
           })
@@ -136,13 +121,13 @@ router.get('/deck/:deckID/winloss-multicolors', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   console.log("/deck/winloss-multicolors" + JSON.stringify(req.params))
-  const { user } = req.user;
+
   let colorCounts = {}
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(gameCollection)
-    const addFilter = {'hero': user, 'players.0.deck.deckID': req.params.deckID}
+    const addFilter = {trackerIDHash: {$in: req.authorizedTrackers}, 'players.0.deck.deckID': req.params.deckID}
     let allDeckGames = collection.find(addFilter)
     console.log(addFilter)
     allDeckGames.toArray((err, gameArray) => {
@@ -169,7 +154,7 @@ router.get('/deck/:deckID/winloss-multicolors', (req, res, next) => {
             colorCounts[colors] = {total: 0, wins: 0};
           }
           colorCounts[colors].total += 1
-          if (game.winner == user) {
+          if (game.winner == game.hero) {
             colorCounts[colors].wins += 1
           }
         }
@@ -181,12 +166,11 @@ router.get('/deck/:deckID/winloss-multicolors', (req, res, next) => {
 
 router.post('/deck/:deckID/hide', (req, res, next) => {
   console.log("/api/deck/" + req.params.deckID + "/hide " + JSON.stringify(req.params))
-  const { user } = req.user;
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     let decks = client.db(DATABASE).collection(deckCollection)
-    let deckPromise = decks.findOne({deckID: req.params.deckID, owner: user})
+    let deckPromise = decks.findOne({deckID: req.params.deckID, trackerIDHash: {$in: req.authorizedTrackers}})
     deckPromise.then(deckObj => {
       deckObj.hidden = true;
       decks.save(deckObj)
@@ -197,12 +181,11 @@ router.post('/deck/:deckID/hide', (req, res, next) => {
 
 router.post('/deck/:deckID/unhide', (req, res, next) => {
   console.log("/api/deck/" + req.params.deckID + "/unhide " + JSON.stringify(req.params))
-  const { user } = req.user;
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     let decks = client.db(DATABASE).collection(deckCollection)
-    let deckPromise = decks.findOne({deckID: req.params.deckID, owner: user})
+    let deckPromise = decks.findOne({deckID: req.params.deckID, trackerIDHash: {$in: req.authorizedTrackers}})
     deckPromise.then(deckObj => {
       deckObj.hidden = false;
       decks.save(deckObj)
@@ -225,11 +208,10 @@ router.get('/decks', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
-    const { user } = req.user;
     if (connectErr) return next(connectErr);
 
     let decks = client.db(DATABASE).collection(deckCollection)
-    filter = {owner: user}
+    filter = {trackerIDHash: {$in: req.authorizedTrackers}}
     if (!req.query.includeHidden) {
         filter["hidden"] = {$ne: true}
     }
@@ -249,11 +231,10 @@ router.get('/decks/count', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
-    const { user } = req.user;
     if (connectErr) return next(connectErr);
 
     let decks = client.db(DATABASE).collection(deckCollection)
-    filter = {owner: user}
+    filter = {trackerIDHash: {$in: req.authorizedTrackers}}
     decks.find(filter).count(null, null, (err, count) => {
       client.close();
       res.status(200).send({numDecks: count})
@@ -268,11 +249,10 @@ router.get('/time-stats', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
-    const { user } = req.user;
     if (connectErr) return next(connectErr);
 
     let games = client.db(DATABASE).collection(gameCollection)
-    filter = {hero: user, elapsedTimeSeconds: {$exists: true}}
+    filter = {trackerIDHash: {$in: req.authorizedTrackers}, elapsedTimeSeconds: {$exists: true}}
     console.log(filter)
     games.aggregate([
       {$match: filter},
@@ -291,6 +271,7 @@ router.get('/time-stats', (req, res, next) => {
   })
 })
 
+
 // TODO: uncovered
 router.get('/win-loss', (req, res, next) => {
   console.log("/api/win-loss" + JSON.stringify(req.params))
@@ -298,11 +279,10 @@ router.get('/win-loss', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
-    const { user } = req.user;
     if (connectErr) return next(connectErr);
 
     let decks = client.db(DATABASE).collection(deckCollection)
-    filter = {owner: user}
+    filter = {trackerIDHash: {$in: req.authorizedTrackers}}
 
     decks.find(filter).toArray((err, deckArray) => {
       client.close();
@@ -324,11 +304,10 @@ router.get('/event-breakdown', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
-    const { user } = req.user;
     if (connectErr) return next(connectErr);
 
     let games = client.db(DATABASE).collection(gameCollection)
-    filter = {hero: user, eventID: {$exists: true}}
+    filter = {trackerIDHash: {$in: req.authorizedTrackers}, eventID: {$exists: true}}
 
     games.aggregate([
       {$match: filter},
@@ -346,11 +325,10 @@ router.get('/event-history', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
-    const { user } = req.user;
     if (connectErr) return next(connectErr);
 
     let games = client.db(DATABASE).collection(gameCollection)
-    filter = {hero: user, eventID: {$exists: true}}
+    filter = {trackerIDHash: {$in: req.authorizedTrackers}, eventID: {$exists: true}}
 
     games.find(filter).sort({date: -1}).limit(200).toArray((err, docs) => {
       docs.reverse()
@@ -392,15 +370,14 @@ router.get('/event-history', (req, res, next) => {
 // covered: test_get_game
 router.get('/game/_id/:_id', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-  const { user } = req.user;
   MongoClient.connect(MONGO_URL, (err, client) => {
     const { _id } = req.params;
     if (err) return next(err);
-    client.db(DATABASE).collection(gameCollection).findOne({ _id: new ObjectID(_id) }, (err, result) => {
+    client.db(DATABASE).collection(gameCollection).findOne({ _id: new ObjectID(_id)}, (err, result) => {
       client.close();
       if (err) return next(err);
-      cleanGameRecord(user, result)
-      if(req.user.user != result.hero && req.user.user != result.opponent) res.status(401).send({"error": "not authorized"})
+      cleanGameRecord(req.authorizedTrackers, result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
       else res.status(404).send(result)
     });
@@ -410,14 +387,13 @@ router.get('/game/_id/:_id', (req, res, next) => {
 // covered: test_get_game
 router.get('/game/gameID/:gid', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-  const { user } = req.user;
   MongoClient.connect(MONGO_URL, (err, client) => {
     const gid = req.params.gid;
     getGameById(client, DATABASE, gid, (result, err) => {
       client.close();
       if (err) return next(err);
-      cleanGameRecord(user, result)
-      if(req.user.user != result.hero && req.user.user != result.opponent) res.status(401).send({"error": "not authorized"})
+      cleanGameRecord(req.authorizedTrackers, result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
       else res.status(404).send(result)
     });
@@ -427,7 +403,6 @@ router.get('/game/gameID/:gid', (req, res, next) => {
 // TODO: uncovered
 router.get('/draft/_id/:_id', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-  const { user } = req.user;
   MongoClient.connect(MONGO_URL, (err, client) => {
     const { _id } = req.params;
     if (err) return next(err);
@@ -440,13 +415,12 @@ router.get('/draft/_id/:_id', (req, res, next) => {
       cleanDraftRecord(result)
       console.log("ok4")
       console.log(result)
-      if(req.user.user != result.hero) res.status(401).send({"error": "not authorized"})
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
       else res.status(404).send(result)
     });
   });
 });
-
 
 
 // TODO: unconvered
@@ -458,10 +432,9 @@ router.get('/drafts', (req, res, next) => {
     var per_page = 10;
   }
   const { page = 1 } = req.query;
-  const { user } = req.user;
 
   // TODO: see /games/ and add a similar draftFilter
-  const addFilter = {'hero': user}
+  const addFilter = {trackerIDHash: {$in: req.authorizedTrackers}}
 
   console.log(`=========================> using filter ${JSON.stringify(addFilter)}`)
 
