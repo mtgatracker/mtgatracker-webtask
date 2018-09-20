@@ -26,6 +26,7 @@ const {
   randomString,
   routeDoc,
   sendDiscordMessage,
+  collectionCollection,
   deckCollection,
   draftCollection,
   gameCollection,
@@ -388,6 +389,25 @@ router.get('/event-history', (req, res, next) => {
     })
   })
 })
+
+// covered: test_get_game
+router.get('/collection', (req, res, next) => {
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  const { user } = req.user;
+
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    if (err) return next(err);
+    let collection = client.db(DATABASE).collection(collectionCollection)
+    collection.find({"owner": req.user.user}).sort({date: -1}).limit(1).next((err, result) => {
+      client.close();
+      if (err) return next(err);
+      if (req.user.user != result.owner) res.status(401).send({"error": "not authorized"})
+      if (result !== null) res.status(200).send(result)
+      else res.status(404).send(result)
+    });
+  });
+});
 
 // covered: test_get_game
 router.get('/game/_id/:_id', (req, res, next) => {
