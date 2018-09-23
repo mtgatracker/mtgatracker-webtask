@@ -70,6 +70,7 @@ let userIsAdmin = (req, res, next) => {
 }
 
 let userUpToDate = (req, res, next) => {
+  if (req.path == "/authorize-token") return next()
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
@@ -90,15 +91,15 @@ let userUpToDate = (req, res, next) => {
 
 let attachAuthorizedTrackers = (req, res, next) => {
  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     const { userKey } = req;
     if (connectErr) return next(connectErr);
     let users = client.db(DATABASE).collection(userCollection)
     users.findOne({userKey: userKey}).then(user => {
-      console.log(user)
-      if (!user) res.status(400).send({"error": "no_user_found"})
-      else if (user.authorizedTrackers.length == 0) res.status(400).send({"error": "no records"})
+      if (!user) return res.status(400).send({"error": "no_user_found"})
+      else if (user.authorizedTrackers.length == 0 && req.path != "/authorize-token") {
+        return res.status(400).send({"error": "no records"})
+      }
       else if (user.authorizedTrackers) {
         req.authorizedTrackers = user.authorizedTrackers;
         next()

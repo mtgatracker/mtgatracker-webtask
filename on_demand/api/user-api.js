@@ -18,6 +18,7 @@ const {
   gameCollection,
   userCollection,
   errorCollection,
+  trackerCollection,
 } = require('../../util')
 
 var secrets; // babel makes it so we can't const this, I am pretty sure
@@ -461,6 +462,32 @@ router.get('/drafts', (req, res, next) => {
           docs: docs
         });
         client.close()
+      })
+    })
+  })
+})
+
+router.post('/authorize-token/', (req, res, next) => {
+  console.log("/authorize-token/")
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  const { userKey } = req;
+  let { trackerID } = req.body;
+  MongoClient.connect(MONGO_URL, (connectErr, client) => {
+    let trackers = client.db(DATABASE).collection(trackerCollection)
+    trackers.findOne({trackerID: trackerID}).then(tracker => {
+      if (!tracker) {
+        return res.status(404).send({"error": "tracker_not_registered"})
+      }
+      let { trackerIDHash } = tracker;
+      let users = client.db(DATABASE).collection(userCollection)
+      users.findOne({userKey: userKey}).then(user => {
+        if (!user.authorizedTrackers.includes(trackerID)) {
+          user.authorizedTrackers.push(trackerIDHash)
+          users.save(user)
+          res.status(200).send({"authorized" : trackerIDHash})
+        } else {
+          res.status(200).send({"already_authorized": trackerIDHash})
+        }
       })
     })
   })
