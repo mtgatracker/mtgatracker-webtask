@@ -346,7 +346,7 @@ let getTwitchIDToken = (options) => {
       client_secret: client_secret,
       code: accessCode,
       grant_type: "authorization_code",
-      redirect_uri: "http://localhost:3000/twitchAuth"
+      redirect_uri: "https://inspector.mtgatracker.com/twitchAuth"
     }
     let twitchTokenUrl = buildUrl("https://id.twitch.tv/oauth2/token", params)
     request.post({
@@ -396,7 +396,7 @@ let getDiscordAccessToken = (options) => {
       code: accessCode,
       grant_type: "authorization_code",
       scope: "identify",
-      redirect_uri: "http://localhost:3000/discordAuth"
+      redirect_uri: "https://inspector.mtgatracker.com/discordAuth"
     }
     let discordTokenUrl = buildUrl("https://discordapp.com/api/oauth2/token", params)
     request.post({
