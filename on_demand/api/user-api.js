@@ -19,6 +19,8 @@ const {
   userCollection,
   errorCollection,
   trackerCollection,
+  msanitize,
+  assertStringOr400,
 } = require('../../util')
 
 var secrets; // babel makes it so we can't const this, I am pretty sure
@@ -44,6 +46,10 @@ router.get('/games', (req, res, next) => {
   }
   const { page = 1 } = req.query;
   const { user } = req.user;
+
+  // authorizedTrackers is safe
+  // createDeckFitlers is safe.
+  // no asserts needed here
   const addFilter = Object.assign({trackerIDHash: {$in: req.authorizedTrackers}}, createDeckFilter(req.query))
 
   console.log(`=========================> using filter ${JSON.stringify(addFilter)}`)
@@ -86,6 +92,9 @@ router.get('/deck/:deckID/winloss-colors', (req, res, next) => {
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(gameCollection)
+
+    if (assertStringOr400(req.params.deckID, res)) return;
+
     const addFilter = {trackerIDHash: {$in: req.authorizedTrackers}, 'players.0.deck.deckID': req.params.deckID}
     let allDeckGames = collection.find(addFilter)
     allDeckGames.toArray((err, gameArray) => {
@@ -128,6 +137,7 @@ router.get('/deck/:deckID/winloss-multicolors', (req, res, next) => {
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(gameCollection)
+    if (assertStringOr400(req.params.deckID, res)) return;
     const addFilter = {trackerIDHash: {$in: req.authorizedTrackers}, 'players.0.deck.deckID': req.params.deckID}
     let allDeckGames = collection.find(addFilter)
     console.log(addFilter)
@@ -171,6 +181,7 @@ router.post('/deck/:deckID/hide', (req, res, next) => {
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     let decks = client.db(DATABASE).collection(deckCollection)
+    if (assertStringOr400(req.params.deckID, res)) return;
     let deckPromise = decks.findOne({deckID: req.params.deckID, trackerIDHash: {$in: req.authorizedTrackers}})
     deckPromise.then(deckObj => {
       deckObj.hidden = true;
@@ -186,6 +197,7 @@ router.post('/deck/:deckID/unhide', (req, res, next) => {
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     let decks = client.db(DATABASE).collection(deckCollection)
+    if (assertStringOr400(req.params.deckID, res)) return;
     let deckPromise = decks.findOne({deckID: req.params.deckID, trackerIDHash: {$in: req.authorizedTrackers}})
     deckPromise.then(deckObj => {
       deckObj.hidden = false;
@@ -212,6 +224,8 @@ router.get('/decks', (req, res, next) => {
     if (connectErr) return next(connectErr);
 
     let decks = client.db(DATABASE).collection(deckCollection)
+
+    // these are both safe
     filter = {trackerIDHash: {$in: req.authorizedTrackers}}
     if (!req.query.includeHidden) {
         filter["hidden"] = {$ne: true}
@@ -235,6 +249,7 @@ router.get('/decks/count', (req, res, next) => {
     if (connectErr) return next(connectErr);
 
     let decks = client.db(DATABASE).collection(deckCollection)
+    // authorizedTrackers is safe
     filter = {trackerIDHash: {$in: req.authorizedTrackers}}
     decks.find(filter).count(null, null, (err, count) => {
       client.close();
@@ -284,7 +299,7 @@ router.get('/win-loss', (req, res, next) => {
 
     let decks = client.db(DATABASE).collection(deckCollection)
     filter = {trackerIDHash: {$in: req.authorizedTrackers}}
-
+    // authorizedTrackers is safe
     decks.find(filter).toArray((err, deckArray) => {
       client.close();
       winLoss = {wins: 0, losses: 0}
@@ -330,7 +345,7 @@ router.get('/event-history', (req, res, next) => {
 
     let games = client.db(DATABASE).collection(gameCollection)
     filter = {trackerIDHash: {$in: req.authorizedTrackers}, eventID: {$exists: true}}
-
+    // authorizedTrackers is safe
     games.find(filter).sort({date: -1}).limit(200).toArray((err, docs) => {
       docs.reverse()
       let firstDate = `${docs[0].date.getMonth() + 1}/${docs[0].date.getDate()}`
@@ -373,6 +388,7 @@ router.get('/game/_id/:_id', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   MongoClient.connect(MONGO_URL, (err, client) => {
     const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
     if (err) return next(err);
     client.db(DATABASE).collection(gameCollection).findOne({ _id: new ObjectID(_id)}, (err, result) => {
       client.close();
@@ -406,15 +422,12 @@ router.get('/draft/_id/:_id', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   MongoClient.connect(MONGO_URL, (err, client) => {
     const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
     if (err) return next(err);
-    console.log("ok1")
     client.db(DATABASE).collection(draftCollection).findOne({ _id: new ObjectID(_id) }, (err, result) => {
-      console.log("ok2")
       client.close();
-      console.log("ok3")
       if (err) return next(err);
       cleanDraftRecord(result)
-      console.log("ok4")
       console.log(result)
       if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
@@ -435,6 +448,8 @@ router.get('/drafts', (req, res, next) => {
   const { page = 1 } = req.query;
 
   // TODO: see /games/ and add a similar draftFilter
+
+  // authorizedTrackers is safe
   const addFilter = {trackerIDHash: {$in: req.authorizedTrackers}}
 
   console.log(`=========================> using filter ${JSON.stringify(addFilter)}`)
@@ -472,6 +487,9 @@ router.post('/authorize-token/', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   const { userKey } = req;
   let { trackerID } = req.body;
+
+  if (assertStringOr400(trackerID, res)) return;
+
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     let trackers = client.db(DATABASE).collection(trackerCollection)
     trackers.findOne({trackerID: trackerID}).then(tracker => {

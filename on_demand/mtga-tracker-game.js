@@ -40,6 +40,8 @@ const {
   userCollection,
   errorCollection,
   twitchJWKExpressSecret,
+  msanitize,
+  assertStringOr400,
 } = require('../util')
 
 const BluebirdPromise = require('bluebird')
@@ -92,7 +94,10 @@ let userUpToDate = (req, res, next) => {
 let attachAuthorizedTrackers = (req, res, next) => {
  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
+
     const { userKey } = req;
+    if (assertStringOr400(userKey, res)) return;
+
     if (connectErr) return next(connectErr);
     let users = client.db(DATABASE).collection(userCollection)
     users.findOne({userKey: userKey}).then(user => {
@@ -145,17 +150,27 @@ function attachUserKey(req, res, next) {
   res.status(400).send({"error": "cant_create_user_key"})
 }
 
+// don't allow any $ operators as keys in any object anywhere in the body
+// draconian? yes. effective? also, yes.
+function mongoSanitize(req, res, next) {
+    msanitize(req.body)
+    msanitize(req.user)
+    msanitize(req.params)
+    next()
+}
+
 function ejwt_wrapper(req, res, next) {
   // https://github.com/auth0/node-jwks-rsa/tree/master/examples/express-demo
-  return ejwt({ secret: secretCallback, getToken: getCookieToken })
+  console.log("enter ejwt")
+  return ejwt({secret: secretCallback, getToken: getCookieToken})
     (req, res, next);
 }
 
-server.use('/public-api', publicAPI)
-server.use('/api', ejwt_wrapper, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
-server.use('/anon-api', ejwt_wrapper, anonAPI)
-server.use('/tracker-api', ejwt_wrapper, attachTrackerID, trackerAPI)
-server.use('/admin-api', ejwt_wrapper, attachUserKey, userIsAdmin, adminAPI)
+server.use('/public-api', mongoSanitize, publicAPI)
+server.use('/api', ejwt_wrapper, mongoSanitize, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
+server.use('/anon-api', ejwt_wrapper, mongoSanitize, anonAPI)
+server.use('/tracker-api', ejwt_wrapper, mongoSanitize, attachTrackerID, trackerAPI)
+server.use('/admin-api', ejwt_wrapper, mongoSanitize, attachUserKey, userIsAdmin, adminAPI)
 
 server.get('/', (req, res, next) => {
   res.status(200).send({

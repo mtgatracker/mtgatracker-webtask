@@ -17,6 +17,25 @@ Promise.onPossiblyUnhandledRejection((e, promise) => {
     throw e
 })
 
+// upgraded version of https://github.com/vkarpov15/mongo-sanitize/blob/master/index.js
+// checks for nested $ commands!
+let msanitize = v => {
+  if (v instanceof Object) {
+    for (var key in v) {
+      if (/^\$/.test(key)) {
+        delete v[key];
+      } else {
+        msanitize(v[key])
+      }
+    }
+  }
+  return v;
+}
+
+let assertStringOr400 = (val, res) => {
+  if (!(typeof val === 'string' || val instanceof String)) return res.status(400).send({"error": "malformed_request"})
+}
+
 let Game = backbone.Model.extend({
   validate: function(attr) {
     let err = []
@@ -93,6 +112,8 @@ let createAnonymousToken = (jwtSecret) => {
   return jwt.sign({"user": null, "anonymousClientID": random6DigitCode()}, jwtSecret, {expiresIn: "1d"})
 }
 
+// TODO: clean this mess up. this functionality is not published, so no one should be using it yet, but, like...
+// what tf is going on here
 let createDeckFilter = (query) => {
   queryObj = {}
   filterable = {
@@ -101,19 +122,21 @@ let createDeckFilter = (query) => {
     "deckID": "players.0.deck.deckID",
     "opponent": "opponent"}
   Object.keys(query).filter(key => Object.keys(filterable).includes(key)).forEach(key => {
-    filterObj = query[key]
+    filterObj = query[key].toString()  // sanitize query inputs, juuuust to be safe
 
     // js doesn't allow literals as keys :(
     let matchFilter = {}
     matchFilter[`${filterable[key]}`] = filterObj
+
+    // TODO: ....why this??
     let doesntExistFilter = {}
     doesntExistFilter[`${filterable[key]}`] = {$exists: false}
 
-    if (!queryObj.$and) {
-      queryObj.$and = []
-    }
+    if (queryObj["$and"] == undefined) queryObj["$and"] = []
     queryObj["$and"].push({
-      $or: [ matchFilter, doesntExistFilter ]  // match where they are equal, or the filter doesn't exist in the db, e.g. colors
+      $or: [ matchFilter, doesntExistFilter ]
+      // match where they are equal, or the filter doesn't exist in the db, e.g. colors
+      // TODO: .... ^ what??
     })
   })
   return queryObj
@@ -125,10 +148,10 @@ let getCookieToken = (req) => {
     console.log("from cookie")
     return req.headers.cookie.split('=')[1];
   } else if (req.query && req.query.token) {
-    console.log("from query.token")
+    console.log("from req.query.token")
     return req.query.token;
   } else if (req.headers && req.headers.token) {
-    console.log("from query.headers.token")
+    console.log("from req.headers.token")
     return req.headers.token;
   } else if (req.headers && req.headers.Authorization && req.headers.Authorization.split(" ")[0] === "access_token") {
     console.log("from query.headers.Authorization[access_token]")
@@ -516,4 +539,6 @@ module.exports = {
   generateInternalToken: generateInternalToken,
   getOrCreateUser: getOrCreateUser,
   twitchJWKExpressSecret: twitchJWKExpressSecret,
+  msanitize: msanitize,
+  assertStringOr400: assertStringOr400,
 }
