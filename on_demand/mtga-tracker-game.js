@@ -38,7 +38,9 @@ const {
   deckCollection,
   gameCollection,
   userCollection,
-  errorCollection
+  errorCollection,
+  msanitize,
+  assertStringOr400,
 } = require('../util')
 
 const BluebirdPromise = require('bluebird')
@@ -108,6 +110,7 @@ function revokableTokenValid(req, res, next) {
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     const { user } = req.user;
+    if (assertStringOr400(user, res)) return;
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(userCollection)
     collection.findOne({"username": user}).then(userObj => {
@@ -133,13 +136,30 @@ function userTokenMatchesData(req, res, next) {
   } else {
     return res.status(400).send({"error": "bad_format"})
   }
+  res.status(400).send({"error": "cant_create_user_key"})
 }
 
-server.use('/public-api', publicAPI)
-server.use('/api', ejwt_wrapper, unescapeUser, userUpToDate, userAPI)
-server.use('/anon-api', ejwt_wrapper, anonAPI)
-server.use('/tracker-api', ejwt_wrapper, unescapeUser, revokableTokenValid, userTokenMatchesData, trackerAPI)
-server.use('/admin-api', ejwt_wrapper, unescapeUser, userIsAdmin, adminAPI)
+// don't allow any $ operators as keys in any object anywhere in the body
+// draconian? yes. effective? also, yes.
+function mongoSanitize(req, res, next) {
+    msanitize(req.body)
+    msanitize(req.user)
+    msanitize(req.params)
+    next()
+}
+
+function ejwt_wrapper(req, res, next) {
+  // https://github.com/auth0/node-jwks-rsa/tree/master/examples/express-demo
+  console.log("enter ejwt")
+  return ejwt({secret: req.webtaskContext.secrets.JWT_SECRET, getToken: getCookieToken})
+    (req, res, next);
+}
+
+server.use('/public-api', mongoSanitize, publicAPI)
+server.use('/api', ejwt_wrapper, mongoSanitize, unescapeUser, userUpToDate, userAPI)
+server.use('/anon-api', ejwt_wrapper, mongoSanitize, anonAPI)
+server.use('/tracker-api', ejwt_wrapper, mongoSanitize, unescapeUser, revokableTokenValid, userTokenMatchesData, trackerAPI)
+server.use('/admin-api', ejwt_wrapper, mongoSanitize, unescapeUser, userIsAdmin, adminAPI)
 
 server.get('/', (req, res, next) => {
   res.status(200).send({

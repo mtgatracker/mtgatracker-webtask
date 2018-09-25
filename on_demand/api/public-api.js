@@ -2,6 +2,7 @@
 
 const express = require('express'),
       router = express.Router();
+
 const { MongoClient, ObjectID } = require('mongodb');
 const {
   createAnonymousToken,
@@ -11,6 +12,8 @@ const {
   sendDiscordMessage,
   userCollection,
   notificationCollection,
+  msanitize,
+  assertStringOr400,
 } = require('../../util')
 
 var secrets; // babel makes it so we can't const this, I am pretty sure

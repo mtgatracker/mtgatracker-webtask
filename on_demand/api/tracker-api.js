@@ -22,6 +22,8 @@ const {
   userCollection,
   inventoryCollection,
   notificationCollection,
+  assertStringOr400,
+  msanitize,
 } = require('../../util')
 
 var secrets; // babel makes it so we can't const this, I am pretty sure
@@ -52,6 +54,11 @@ router.post("/draft-pick", (req, res, next) => {
 
   MongoClient.connect(MONGO_URL, (err, client) => {
     if (err) return next(err);
+
+    if (assertStringOr400(hero, res)) return;
+    if (assertStringOr400(draftID, res)) return;
+    if (assertStringOr400(trackerIDHash, res)) return;
+
     client.db(DATABASE).collection(draftCollection)
       .find({hero: hero, draftID: draftID})
       .sort({date: -1}).limit(1)
@@ -191,6 +198,11 @@ router.post('/game', (req, res, next) => {
                 res.status(400).send({error: "game already exists", game: result});
                 return;
               }
+
+              if(assertStringOr400(model.hero, res)) return;
+              if(assertStringOr400(model.players[0].deck.deckID, res)) return;
+              if(assertStringOr400(model.trackerIDHash, res)) return;
+
               client.db(DATABASE).collection(gameCollection).insertOne(model, (err, result) => {
                 let deckQuery = {owner: model.hero, deckID: model.players[0].deck.deckID}
                 client.db(DATABASE).collection(deckCollection).find(deckQuery).limit(1).next((err, result) => {
@@ -246,6 +258,10 @@ router.post('/inventory', (req, res, next) => {
     let insertPromises = [];
     let inserted = [];
 
+    if (assertStringOr400(model.playerId, res)) return;
+    if (assertStringOr400(key, res)) return;
+    if (assertStringOr400(req.user.trackerIDHash, res)) return;
+
     Object.keys(model).forEach(key => {
       if (key != "playerId") {
         queries.push(key)
@@ -292,6 +308,7 @@ router.post('/rankChange', (req, res, next) => {
     if (err) return next(err);
     //client, database, username, createIfDoesntExist, isUser
     let collection = client.db(DATABASE).collection(gameCollection)
+  if (assertStringOr400(model.playerId, res)) return;
     let cursor = collection.find({"players.0.userID": model.playerId}).sort({date: -1}).limit(1).next((err, result) => {
       if (err) return next(err);
       if (result == null) {

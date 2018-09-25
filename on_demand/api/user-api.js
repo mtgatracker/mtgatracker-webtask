@@ -31,6 +31,8 @@ const {
   gameCollection,
   userCollection,
   errorCollection,
+  msanitize,
+  assertStringOr400,
 } = require('../../util')
 
 var secrets; // babel makes it so we can't const this, I am pretty sure
@@ -57,6 +59,7 @@ router.get('/games', (req, res, next) => {
   }
   const { page = 1 } = req.query;
   const { user } = req.user;
+  if (assertStringOr400(user, res)) return;
   const addFilter = Object.assign({'players.name': user}, createDeckFilter(req.query))
 
   console.log(`=========================> using filter ${JSON.stringify(addFilter)}`)
@@ -100,6 +103,8 @@ router.get('/deck/:deckID/winloss-colors', (req, res, next) => {
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(gameCollection)
+    if (assertStringOr400(user, res)) return;
+    if (assertStringOr400(req.params.deckID, res)) return;
     const addFilter = {'hero': user, 'players.0.deck.deckID': req.params.deckID}
     let allDeckGames = collection.find(addFilter)
     allDeckGames.toArray((err, gameArray) => {
@@ -142,6 +147,7 @@ router.get('/deck/:deckID/winloss-multicolors', (req, res, next) => {
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(gameCollection)
+    if (assertStringOr400(user, res)) return;
     const addFilter = {'hero': user, 'players.0.deck.deckID': req.params.deckID}
     let allDeckGames = collection.find(addFilter)
     console.log(addFilter)
@@ -186,6 +192,7 @@ router.post('/deck/:deckID/hide', (req, res, next) => {
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     let decks = client.db(DATABASE).collection(deckCollection)
+    if (assertStringOr400(req.params.deckID, res)) return;
     let deckPromise = decks.findOne({deckID: req.params.deckID, owner: user})
     deckPromise.then(deckObj => {
       deckObj.hidden = true;
@@ -202,6 +209,7 @@ router.post('/deck/:deckID/unhide', (req, res, next) => {
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     let decks = client.db(DATABASE).collection(deckCollection)
+    if (assertStringOr400(req.params.deckID, res)) return;
     let deckPromise = decks.findOne({deckID: req.params.deckID, owner: user})
     deckPromise.then(deckObj => {
       deckObj.hidden = false;
@@ -229,6 +237,7 @@ router.get('/decks', (req, res, next) => {
     if (connectErr) return next(connectErr);
 
     let decks = client.db(DATABASE).collection(deckCollection)
+    if (assertStringOr400(user, res)) return;
     filter = {owner: user}
     if (!req.query.includeHidden) {
         filter["hidden"] = {$ne: true}
@@ -253,6 +262,7 @@ router.get('/decks/count', (req, res, next) => {
     if (connectErr) return next(connectErr);
 
     let decks = client.db(DATABASE).collection(deckCollection)
+    if (assertStringOr400(user, res)) return;
     filter = {owner: user}
     decks.find(filter).count(null, null, (err, count) => {
       client.close();
@@ -272,6 +282,7 @@ router.get('/time-stats', (req, res, next) => {
     if (connectErr) return next(connectErr);
 
     let games = client.db(DATABASE).collection(gameCollection)
+    if (assertStringOr400(user, res)) return;
     filter = {hero: user, elapsedTimeSeconds: {$exists: true}}
     console.log(filter)
     games.aggregate([
@@ -302,6 +313,7 @@ router.get('/win-loss', (req, res, next) => {
     if (connectErr) return next(connectErr);
 
     let decks = client.db(DATABASE).collection(deckCollection)
+    if (assertStringOr400(user, res)) return;
     filter = {owner: user}
 
     decks.find(filter).toArray((err, deckArray) => {
@@ -328,6 +340,7 @@ router.get('/event-breakdown', (req, res, next) => {
     if (connectErr) return next(connectErr);
 
     let games = client.db(DATABASE).collection(gameCollection)
+    if (assertStringOr400(user, res)) return;
     filter = {hero: user, eventID: {$exists: true}}
 
     games.aggregate([
@@ -350,6 +363,7 @@ router.get('/event-history', (req, res, next) => {
     if (connectErr) return next(connectErr);
 
     let games = client.db(DATABASE).collection(gameCollection)
+    if (assertStringOr400(user, res)) return;
     filter = {hero: user, eventID: {$exists: true}}
 
     games.find(filter).sort({date: -1}).limit(200).toArray((err, docs) => {
@@ -395,6 +409,7 @@ router.get('/game/_id/:_id', (req, res, next) => {
   const { user } = req.user;
   MongoClient.connect(MONGO_URL, (err, client) => {
     const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
     if (err) return next(err);
     client.db(DATABASE).collection(gameCollection).findOne({ _id: new ObjectID(_id) }, (err, result) => {
       client.close();
@@ -430,15 +445,12 @@ router.get('/draft/_id/:_id', (req, res, next) => {
   const { user } = req.user;
   MongoClient.connect(MONGO_URL, (err, client) => {
     const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
     if (err) return next(err);
-    console.log("ok1")
     client.db(DATABASE).collection(draftCollection).findOne({ _id: new ObjectID(_id) }, (err, result) => {
-      console.log("ok2")
       client.close();
-      console.log("ok3")
       if (err) return next(err);
       cleanDraftRecord(result)
-      console.log("ok4")
       console.log(result)
       if(req.user.user != result.hero) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
