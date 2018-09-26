@@ -16,7 +16,6 @@ const {
   getCookieToken,
   getGameById,
   getGithubStats,
-  getPublicName,
   logError,
   parseVersionString,
   random6DigitCode,

@@ -7,6 +7,7 @@ import { MongoClient, ObjectID } from 'mongodb';
 
 const ejwt = require('express-jwt');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 //var iopipe = require('@iopipe/iopipe')({
 //  token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYTU3ODg3MS00YWViLTQ0ZmItYTZhZi00NDIyNTA5Zjk5MDAiLCJqdGkiOiJjNjlkM2JiOS0xNDk5LTRlYjAtOTgwZi03NjQ0NDQwMzYwMTQiLCJpYXQiOjE1MzQzODM1MDUsImlzcyI6Imh0dHBzOi8vaW9waXBlLmNvbSIsImF1ZCI6Imh0dHBzOi8vaW9waXBlLmNvbSxodHRwczovL21ldHJpY3MtYXBpLmlvcGlwZS5jb20vZXZlbnQvLGh0dHBzOi8vZ3JhcGhxbC5pb3BpcGUuY29tIn0.jFJtw4LAm3BB7mUXjNULDXk3dmBUuNSOxzWkgSXCnT8'
@@ -20,7 +21,6 @@ var secrets; // babel makes it so we can't const this, I am pretty sure
 //}
 
 const {
-  clientVersionUpToDate,
   createAnonymousToken,
   createToken,
   differenceMinutes,
@@ -38,7 +38,10 @@ const {
   deckCollection,
   gameCollection,
   userCollection,
-  errorCollection
+  errorCollection,
+  twitchJWKExpressSecret,
+  msanitize,
+  assertStringOr400,
 } = require('../util')
 
 const BluebirdPromise = require('bluebird')
@@ -57,6 +60,9 @@ const userAPI = require('./api/user-api')
 const adminAPI = require('./api/admin-api')
 const trackerAPI = require('./api/tracker-api')
 
+const TWITCH_ISSUER = "https://id.twitch.tv/oauth2"
+const LOCAL_ISSUER = "https://inspector.mtgatracker.com"
+
 let userIsAdmin = (req, res, next) => {
   if (req.user.user == "Spencatro") {
     next()
@@ -66,80 +72,105 @@ let userIsAdmin = (req, res, next) => {
 }
 
 let userUpToDate = (req, res, next) => {
+  if (req.path == "/authorize-token") return next()
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
-    const { user } = req.user;
     if (connectErr) return next(connectErr);
-    let collection = client.db(DATABASE).collection(gameCollection)
-    let cursor = collection.find({'hero': user}).sort({date: -1});
-    cursor.next((err, doc) => {
-      if (err) return next(err);
-      if (!doc) {
-        res.status(400).send({"error": "no records"})
-      } else if (doc && doc.clientVersionOK) next()
+    // find games from either tracker
+    let games = client.db(DATABASE).collection(gameCollection)
+    games.find({trackerIDHash: {$in: req.authorizedTrackers}}).sort({date: -1}).next().then(game => {
+      if (!game) return res.status(400).send({"error": "no records"})
+      if (game.clientVersionOK) return next()
       else {
-       console.log(`Rejecting ${user}'s API request (locked), on record:'`)
-       console.log(req.user.doc)
+       console.log(`Rejecting ${userKey}'s API request (locked), on record:'`)
+       console.log(game)
        res.status(400).send({"error": "your account has been locked"})
       }
     })
   })
 }
 
-function ejwt_wrapper(req, res, next) {
-  return ejwt({ secret: req.webtaskContext.secrets.JWT_SECRET, getToken: getCookieToken })
-    (req, res, next);
-}
-
-function unescapeUser(req, res, next) {
-  // if you got to unescapeUser with no user token, you goofed
-  if (!req.user.user) {
-    res.status(400).send({"error": "bad_auth"})
-  } else {
-    req.user.user = req.user.user.replace(/\\/g, '')
-    next()
-  }
-}
-
-function revokableTokenValid(req, res, next) {
-  if (!req.user.long) return res.status(400).send({"error": "incorrect_token"})
-  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-
+let attachAuthorizedTrackers = (req, res, next) => {
+ const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
-    const { user } = req.user;
+
+    const { userKey } = req;
+    if (assertStringOr400(userKey, res)) return;
+
     if (connectErr) return next(connectErr);
-    let collection = client.db(DATABASE).collection(userCollection)
-    collection.findOne({"username": user}).then(userObj => {
-      if (userObj.authLong.tokens.includes(getCookieToken(req).split(".")[2])) next()
-      else {
-       console.log(`Rejecting ${user}'s LONG-TOKEN API request, on record:'`)
-       console.log(req.user.doc)
-       res.status(400).send({"error": "token_revoked"})
+    let users = client.db(DATABASE).collection(userCollection)
+    users.findOne({userKey: userKey}).then(user => {
+      if (!user) return res.status(400).send({"error": "no_user_found"})
+      else if (user.authorizedTrackers.length == 0 && req.path != "/authorize-token") {
+        return res.status(400).send({"error": "no records"})
+      }
+      else if (user.authorizedTrackers) {
+        req.authorizedTrackers = user.authorizedTrackers;
+        next()
       }
     })
   })
 }
 
-function userTokenMatchesData(req, res, next) {
-  // tracker uses root of tracker api to check if we're authed, there's no body posted here. next is fine in that case.
-  if (req.originalUrl.endsWith("tracker-api/")) return next()
-  const model = req.body;
-  if (model.hero) {
-    if (model.hero == req.user.user) return next()
-    return res.status(400).send({"error": "bad_auth"})
-  } else if(model.players) {
-    if (model.players[0].name == req.user.user) return next()
+
+var secretCallback = function(req, header, payload, done){
+  // twitch issuer: 'https://id.twitch.tv/oauth2'
+  // mtgatracker issuer: 'https://inspector.mtgatracker.com'
+  var issuer = payload.iss;
+  if (issuer == LOCAL_ISSUER) {
+    return done(null, req.webtaskContext.secrets.JWT_SECRET);
+  } else if (issuer == TWITCH_ISSUER) {
+    return twitchJWKExpressSecret(req, header, payload, done);
   } else {
-    return res.status(400).send({"error": "bad_format"})
+    return done(new Error('missing_secret'))
+  }
+};
+
+function attachTrackerID(req, res, next) {
+  const { TRACKER_HASH_SECRET } = req.webtaskContext.secrets;
+  let trackerIDHash = crypto.createHash('sha256').update(req.user.trackerID + TRACKER_HASH_SECRET).digest('hex')
+  if (!req.user.trackerIDHash || !req.user.trackerID) res.status(401).send({"error": "not_authorized"})
+  if (trackerIDHash != req.user.trackerIDHash) {
+    return res.status(400).send({"error": "tracker_id_hash_does_not_match"})
+  } else {
+    req.body.trackerIDHash = req.user.trackerIDHash;
+    return next()
   }
 }
 
-server.use('/public-api', publicAPI)
-server.use('/api', ejwt_wrapper, unescapeUser, userUpToDate, userAPI)
-server.use('/anon-api', ejwt_wrapper, anonAPI)
-server.use('/tracker-api', ejwt_wrapper, unescapeUser, revokableTokenValid, userTokenMatchesData, trackerAPI)
-server.use('/admin-api', ejwt_wrapper, unescapeUser, userIsAdmin, adminAPI)
+function attachUserKey(req, res, next) {
+  if (req.user.iss == TWITCH_ISSUER) {
+    req.userKey = `${req.user.sub}:twitch`
+    return next()
+  } else if (req.user.iss == LOCAL_ISSUER && req.user.proxyFor == "discord") {
+    req.userKey = `${req.user.sub}:discord`
+    return next()
+  }
+  res.status(400).send({"error": "cant_create_user_key"})
+}
+
+// don't allow any $ operators as keys in any object anywhere in the body
+// draconian? yes. effective? also, yes.
+function mongoSanitize(req, res, next) {
+    msanitize(req.body)
+    msanitize(req.user)
+    msanitize(req.params)
+    next()
+}
+
+function ejwt_wrapper(req, res, next) {
+  // https://github.com/auth0/node-jwks-rsa/tree/master/examples/express-demo
+  console.log("enter ejwt")
+  return ejwt({secret: secretCallback, getToken: getCookieToken})
+    (req, res, next);
+}
+
+server.use('/public-api', mongoSanitize, publicAPI)
+server.use('/api', ejwt_wrapper, mongoSanitize, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
+server.use('/anon-api', ejwt_wrapper, mongoSanitize, anonAPI)
+server.use('/tracker-api', ejwt_wrapper, mongoSanitize, attachTrackerID, trackerAPI)
+server.use('/admin-api', ejwt_wrapper, mongoSanitize, attachUserKey, userIsAdmin, adminAPI)
 
 server.get('/', (req, res, next) => {
   res.status(200).send({

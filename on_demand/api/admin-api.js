@@ -12,7 +12,6 @@ const {
   getCookieToken,
   getGameById,
   getGithubStats,
-  getPublicName,
   logError,
   parseVersionString,
   random6DigitCode,
@@ -246,23 +245,6 @@ router.delete('/gh-stat-cache', (req, res, next) => {
     console.log("DEL /gh-stat-cache")
     if (err) res.status(500).send(err)
     else res.status(200).send({ok: true})
-  })
-})
-
-// covered: test_get_publicname
-router.get('/publicName/:username', (req, res, next) => {
-  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-
-  const { username } = req.params;
-
-  MongoClient.connect(MONGO_URL, (err, client) => {
-    getPublicName(client, DATABASE, username).then((pubNameObj) => {
-      if (pubNameObj.result) {
-        res.status(200).send(pubNameObj.result)
-      } else {
-        res.status(404).send({error: "no pubname found for user " + username})
-      }
-    })
   })
 })
 
