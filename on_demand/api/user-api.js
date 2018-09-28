@@ -429,13 +429,57 @@ router.get('/draft/_id/:_id', (req, res, next) => {
       if (err) return next(err);
       cleanDraftRecord(result)
       console.log(result)
-      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
+      if (!request.public && !req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
       else res.status(404).send(result)
     });
   });
 });
 
+// TODO: uncovered
+router.post('/draft/_id/:id/publish', (req, res, next) => {
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
+    if (err) return next(err);
+    client.db(DATABASE).collection(draftCollection).findOne({ _id: new ObjectID(_id) }, (err, result) => {
+      client.close();
+      if (err) return next(err);
+      cleanDraftRecord(result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
+      if (result !== null) {
+        result.public = true;
+        collection(draftCollection).save(result);
+        res.status(200).send({published: _id});
+      } 
+      else res.status(404).send(result)
+    });
+  });
+})
+
+
+// TODO: uncovered
+router.post('/draft/_id/:id/unpublish', (req, res, next) => {
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
+    if (err) return next(err);
+    client.db(DATABASE).collection(draftCollection).findOne({ _id: new ObjectID(_id) }, (err, result) => {
+      client.close();
+      if (err) return next(err);
+      cleanDraftRecord(result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
+      if (result !== null) {
+        result.public = false;
+        collection(draftCollection).save(result);
+        res.status(200).send({published: _id});
+      } 
+      else res.status(404).send(result)
+    });
+  });
+})
 
 // TODO: unconvered
 router.get('/drafts', (req, res, next) => {
