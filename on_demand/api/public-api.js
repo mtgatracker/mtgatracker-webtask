@@ -94,6 +94,7 @@ router.post('/tracker-token/', (req, res, next) => {
         result = {
           trackerID: trackerID,
           trackerIDHash: trackerIDHash,
+          date: new Date(),
         }
         trackers.save(result)
       }
