@@ -64,7 +64,7 @@ const TWITCH_ISSUER = "https://id.twitch.tv/oauth2"
 const LOCAL_ISSUER = "https://inspector.mtgatracker.com"
 
 let userIsAdmin = (req, res, next) => {
-  if (req.user.user == "Spencatro") {
+  if (false) { // no one is admin for now, yikes
     next()
   } else {
     res.status(400).send({"error": "you are not an admin, sorry :'("})
@@ -74,6 +74,7 @@ let userIsAdmin = (req, res, next) => {
 let userUpToDate = (req, res, next) => {
   if (req.path == "/authorize-token") return next()
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  const { userKey } = req;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     if (connectErr) return next(connectErr);
@@ -166,9 +167,16 @@ function ejwt_wrapper(req, res, next) {
     (req, res, next);
 }
 
+function anon_ejwt_wrapper(req, res, next) {
+  // https://github.com/auth0/node-jwks-rsa/tree/master/examples/express-demo
+  console.log("enter ejwt")
+  return ejwt({secret: req.webtaskContext.secrets.JWT_SECRET, getToken: getCookieToken})
+    (req, res, next);
+}
+
 server.use('/public-api', mongoSanitize, publicAPI)
 server.use('/api', ejwt_wrapper, mongoSanitize, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
-server.use('/anon-api', ejwt_wrapper, mongoSanitize, anonAPI)
+server.use('/anon-api', anon_ejwt_wrapper, mongoSanitize, anonAPI)
 server.use('/tracker-api', ejwt_wrapper, mongoSanitize, attachTrackerID, trackerAPI)
 server.use('/admin-api', ejwt_wrapper, mongoSanitize, attachUserKey, userIsAdmin, adminAPI)
 

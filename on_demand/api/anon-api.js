@@ -24,6 +24,7 @@ const {
   sendDiscordMessage,
   deckCollection,
   gameCollection,
+  trackerCollection,
   inventoryCollection,
   userCollection,
   errorCollection,
@@ -123,25 +124,25 @@ router.get('/heroes/time-histogram', (req, res, next) => {
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(gameCollection)
-    collection.distinct('hero', {date: {$lt: min_date}}, null, (err, distinctHeroesBefore) => {
+    collection.distinct('trackerIDHash', {date: {$lt: min_date}}, null, (err, distinctTrackersBefore) => {
       if (err) return next(err);
 
-      let distinctHeroesSet = new Set(distinctHeroesBefore)
-      let beforeCount = distinctHeroesSet.size;
+      let distinctTrackersSet = new Set(distinctTrackersBefore)
+      let beforeCount = distinctTrackersSet.size;
 
-      console.log(distinctHeroesSet)
+      console.log(distinctTrackersSet)
 
       let cursor = collection.find({date: {$gt: min_date, $lt: max_date}}, null)
-      collection.distinct('hero', {date: {$gt: min_date, $lt: max_date}}, null, (err, distinctHeroesAfter) => {
+      collection.distinct('hero', {date: {$gt: min_date, $lt: max_date}}, null, (err, distinctTrackersAfter) => {
 
-        console.log(distinctHeroesAfter)
-        let distinctHeroesAfterSet = new Set(distinctHeroesAfter)
-        let distinctHeroesCombined = new Set([...distinctHeroesAfterSet, ...distinctHeroesSet])
+        console.log(distinctTrackersAfter)
+        let distinctTrackersAfterSet = new Set(distinctTrackersAfter)
+        let distinctTrackersCombined = new Set([...distinctTrackersAfterSet, ...distinctTrackersSet])
         const setDifference = (a, b) => new Set([...a].filter(x => !b.has(x)));
-        let distinctHeroesAfterMinusBefore = setDifference(distinctHeroesCombined, distinctHeroesSet)
-        let totalCountAfter = distinctHeroesAfterMinusBefore.size;
+        let distinctTrackersAfterMinusBefore = setDifference(distinctTrackersCombined, distinctTrackersSet)
+        let totalCountAfter = distinctTrackersAfterMinusBefore.size;
 
-        let distinctHeroesAfterCount = distinctHeroesAfterMinusBefore.size;
+        let distinctTrackersAfterCount = distinctTrackersAfterMinusBefore.size;
         let skip = Math.max(1, Math.round(totalCountAfter / sample_size))
         cursor.sort({date: 1})
         cursor.toArray((cursorErr, docs) => {
@@ -149,12 +150,12 @@ router.get('/heroes/time-histogram', (req, res, next) => {
           let currentCount = beforeCount
 
           docs.forEach((doc, idx) => {
-            if (!distinctHeroesSet.has(doc.hero)) {
+            if (!distinctTrackersSet.has(doc.hero)) {
               currentCount += 1
               if (idx % skip == 0 || idx == docs.length - 1) {
                 resultDocs.push({date: doc.date, count: currentCount})
               }
-              distinctHeroesSet.add(doc.hero)
+              distinctTrackersSet.add(doc.hero)
             }
           })
           if (resultDocs.length > sample_size) {
@@ -183,6 +184,10 @@ router.get('/speeds', (req, res, next) => {
 
   const { min_date=weekFromNow, max_date=new Date() } = req.query;
 
+  let openBetaDate = new Date("September 27, 2018, 20:00:00") // UTC
+  let daysSinceOpenBeta = ((new Date() - openBetaDate)  / 36e5) / 24;
+  // https://stackoverflow.com/questions/19225414/how-to-get-the-hours-difference-between-two-date-objects/19225540
+
   let dateQ = {date: {$gt: min_date, $lt: max_date}}
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
@@ -191,7 +196,7 @@ router.get('/speeds', (req, res, next) => {
     collection.count(dateQ, null, (countErr, count) => {
       if (countErr) return next(countErr);
 
-      collection.distinct("hero", null, null, (distinctErr, distinctHeroes) => {
+      collection.distinct("trackerIDHash", null, null, (distinctErr, distinctTrackers) => {
 
         getGithubStats(req.webtaskContext.storage).then((githubStats) => {
           let firstReleaseDate = new Date("March 22, 2018")
@@ -199,8 +204,8 @@ router.get('/speeds', (req, res, next) => {
           let oneDay = 24*60*60*1000; // hours*minutes*seconds*milliseconds
           let daysDiff = Math.round(Math.abs((today.getTime() - firstReleaseDate.getTime())/(oneDay)));
           res.status(200).send({
-            game_speed_per_day: count / 7.0,
-            hero_speed_per_day: distinctHeroes.length / 7.0,
+            game_speed_per_day: count / Math.min(daysSinceOpenBeta, 7.0),
+            hero_speed_per_day: distinctTrackers.length / Math.min(daysSinceOpenBeta, 7.0),
             download_speed_per_day: githubStats.totalDownloads / daysDiff,
           });
           client.close()
@@ -242,9 +247,9 @@ router.get('/users/count', (req, res, next) => {
     if (connectErr) return next(connectErr);
     let collection = client.db(DATABASE).collection(gameCollection)
 
-    collection.distinct("hero", null, null, (error, distinctHeroes) => {
+    collection.distinct("trackerIDHash", null, null, (error, distinctTrackers) => {
       if (error) return next(error);
-      let count = distinctHeroes.length;
+      let count = distinctTrackers.length;
       if (badge) {
         res.set('Cache-Control', 'no-cache')
         request('https://img.shields.io/badge/Unique%20Users-' + count + '-brightgreen.svg').pipe(res);
