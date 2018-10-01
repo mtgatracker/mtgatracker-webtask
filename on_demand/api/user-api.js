@@ -499,7 +499,7 @@ router.post('/authorize-token/', (req, res, next) => {
       let { trackerIDHash } = tracker;
       let users = client.db(DATABASE).collection(userCollection)
       users.findOne({userKey: userKey}).then(user => {
-        if (!user.authorizedTrackers.includes(trackerID)) {
+        if (!user.authorizedTrackers.includes(trackerIDHash)) {
           user.authorizedTrackers.push(trackerIDHash)
           users.save(user)
           res.status(200).send({"authorized" : trackerIDHash})
