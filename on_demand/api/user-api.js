@@ -409,9 +409,48 @@ router.get('/game/gameID/:gid', (req, res, next) => {
     getGameById(client, DATABASE, gid, (result, err) => {
       client.close();
       if (err) return next(err);
+      if (!result) return res.status(404).send({"error": "no_game_found"})
       cleanGameRecord(req.authorizedTrackers, result)
       if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
+      else res.status(404).send(result)
+    });
+  });
+});
+
+router.post('/game/_id/:_id/hide', (req, res, next) => {
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    let collection = client.db(DATABASE).collection(gameCollection)
+    collection.findOne({ _id: new ObjectID(_id)}, (err, result) => {
+      if (err) return next(err);
+      cleanGameRecord(req.authorizedTrackers, result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
+      if (result !== null) {
+         result.hidden = true;
+         collection.save(result)
+         res.status(200).send({"hidden": result})
+      }
+      else res.status(404).send(result)
+    });
+  });
+});
+
+router.post('/game/_id/:_id/unhide', (req, res, next) => {
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    let collection = client.db(DATABASE).collection(gameCollection)
+    collection.findOne({ _id: new ObjectID(_id)}, (err, result) => {
+      if (err) return next(err);
+      cleanGameRecord(req.authorizedTrackers, result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
+      if (result !== null) {
+         result.hidden = false;
+         collection.save(result)
+         res.status(200).send({"unhidden": result})
+      }
       else res.status(404).send(result)
     });
   });
@@ -499,7 +538,7 @@ router.post('/authorize-token/', (req, res, next) => {
       let { trackerIDHash } = tracker;
       let users = client.db(DATABASE).collection(userCollection)
       users.findOne({userKey: userKey}).then(user => {
-        if (!user.authorizedTrackers.includes(trackerID)) {
+        if (!user.authorizedTrackers.includes(trackerIDHash)) {
           user.authorizedTrackers.push(trackerIDHash)
           users.save(user)
           res.status(200).send({"authorized" : trackerIDHash})

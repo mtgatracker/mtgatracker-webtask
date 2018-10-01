@@ -161,7 +161,6 @@ function mongoSanitize(req, res, next) {
 
 function ejwt_wrapper(req, res, next) {
   // https://github.com/auth0/node-jwks-rsa/tree/master/examples/express-demo
-  console.log("enter ejwt")
   return ejwt({secret: secretCallback, getToken: getCookieToken})
     (req, res, next);
 }
