@@ -314,6 +314,7 @@ router.post('/rankChange', (req, res, next) => {
       result.rankChange = model;
       collection.save(result)
       res.status(200).send(result)
+      client.close()
     })
   })
 });
