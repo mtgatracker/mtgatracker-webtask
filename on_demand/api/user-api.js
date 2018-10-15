@@ -429,7 +429,7 @@ router.get('/draft/_id/:_id', (req, res, next) => {
       if (err) return next(err);
       cleanDraftRecord(result)
       console.log(result)
-      if (!request.public && !req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
       else res.status(404).send(result)
     });
@@ -452,7 +452,7 @@ router.post('/draft/_id/:id/publish', (req, res, next) => {
         result.public = true;
         collection(draftCollection).save(result);
         res.status(200).send({published: _id});
-      } 
+      }
       else res.status(404).send(result)
     });
   });
@@ -475,7 +475,7 @@ router.post('/draft/_id/:id/unpublish', (req, res, next) => {
         result.public = false;
         collection(draftCollection).save(result);
         res.status(200).send({published: _id});
-      } 
+      }
       else res.status(404).send(result)
     });
   });

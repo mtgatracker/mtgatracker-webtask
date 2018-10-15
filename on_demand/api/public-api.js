@@ -153,4 +153,30 @@ router.post('/discord-auth-attempt', (req, res, next) => {
   })
 })
 
+// TODO: uncovered
+// This will return only public drafts.
+router.get('/draft/_id/:_id', (req, res, next) => {
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
+    if (err) return next(err);
+    client.db(DATABASE).collection(draftCollection).findOne({ _id: new ObjectID(_id), public: true }, (err, result) => {
+      client.close();
+      if (err) return next(err);
+      cleanDraftRecord(result)
+      console.log(result)
+      if (result !== null)
+      {
+        let safe_result = {}
+        safe_result.picks = result.picks
+        safe_result.date = result.date
+        safe_result._id = result.id
+        res.status(200).send(safe_result)
+      }
+      else res.status(404).send(result)
+    });
+  });
+});
+
 module.exports = router
