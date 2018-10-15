@@ -73,6 +73,8 @@ let userIsAdmin = (req, res, next) => {
 
 let userUpToDate = (req, res, next) => {
   if (req.path == "/authorize-token") return next()
+
+  const { userKey } = req;
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
 
   MongoClient.connect(MONGO_URL, (connectErr, client) => {
