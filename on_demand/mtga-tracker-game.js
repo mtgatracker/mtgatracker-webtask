@@ -113,12 +113,12 @@ let attachAuthorizedTrackers = (req, res, next) => {
   })
 }
 
-
-var secretCallback = function(req, header, payload, done){
+var userSecretCallback = function(req, header, payload, done){
   // twitch issuer: 'https://id.twitch.tv/oauth2'
   // mtgatracker issuer: 'https://inspector.mtgatracker.com'
   var issuer = payload.iss;
   if (issuer == LOCAL_ISSUER) {
+    if (!payload.sub || !payload.preferred_username) return done(new Error('invalid_auth'))
     return done(null, req.webtaskContext.secrets.JWT_SECRET);
   } else if (issuer == TWITCH_ISSUER) {
     return twitchJWKExpressSecret(req, header, payload, done);
@@ -161,15 +161,20 @@ function mongoSanitize(req, res, next) {
 
 function ejwt_wrapper(req, res, next) {
   // https://github.com/auth0/node-jwks-rsa/tree/master/examples/express-demo
-  return ejwt({secret: secretCallback, getToken: getCookieToken})
+  return ejwt({secret: req.webtaskContext.secrets.JWT_SECRET, getToken: getCookieToken})
+    (req, res, next);
+}
+
+function user_ejwt_wrapper(req, res, next) {
+  return ejwt({secret: userSecretCallback, getToken: getCookieToken})
     (req, res, next);
 }
 
 server.use('/public-api', mongoSanitize, publicAPI)
-server.use('/api', ejwt_wrapper, mongoSanitize, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
+server.use('/api', user_ejwt_wrapper, mongoSanitize, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
 server.use('/anon-api', ejwt_wrapper, mongoSanitize, anonAPI)
 server.use('/tracker-api', ejwt_wrapper, mongoSanitize, attachTrackerID, trackerAPI)
-server.use('/admin-api', ejwt_wrapper, mongoSanitize, attachUserKey, userIsAdmin, adminAPI)
+server.use('/admin-api', user_ejwt_wrapper, mongoSanitize, attachUserKey, userIsAdmin, adminAPI)
 
 server.get('/', (req, res, next) => {
   res.status(200).send({

@@ -118,6 +118,7 @@ router.get('/deck/:deckID/winloss-colors', (req, res, next) => {
             }
           })
         }
+        client.close()
         res.status(200).send(colorCounts)
       })
     })
@@ -169,6 +170,7 @@ router.get('/deck/:deckID/winloss-multicolors', (req, res, next) => {
             colorCounts[colors].wins += 1
           }
         }
+        client.close()
         res.status(200).send(colorCounts)
       })
     })
@@ -185,7 +187,7 @@ router.post('/deck/:deckID/hide', (req, res, next) => {
     let deckPromise = decks.findOne({deckID: req.params.deckID, trackerIDHash: {$in: req.authorizedTrackers}})
     deckPromise.then(deckObj => {
       deckObj.hidden = true;
-      decks.save(deckObj)
+      decks.save(deckObj).then(client.close)
       res.status(200).send({hidden: req.params.deckID})
     })
   })
@@ -201,7 +203,7 @@ router.post('/deck/:deckID/unhide', (req, res, next) => {
     let deckPromise = decks.findOne({deckID: req.params.deckID, trackerIDHash: {$in: req.authorizedTrackers}})
     deckPromise.then(deckObj => {
       deckObj.hidden = false;
-      decks.save(deckObj)
+      decks.save(deckObj).then(client.close)
       res.status(200).send({hidden: req.params.deckID})
     })
   })
@@ -282,6 +284,7 @@ router.get('/time-stats', (req, res, next) => {
       }
     ]).toArray((err, timeStats) => {
       delete timeStats[0]._id
+      client.close();
       res.status(200).send({timeStats: timeStats[0]})
     })
   })
@@ -329,6 +332,7 @@ router.get('/event-breakdown', (req, res, next) => {
       {$match: filter},
       {$group: {"_id":"$eventID" , "count": {$sum:1}}}
     ]).toArray((err, eventCounts) => {
+      client.close();
       res.status(200).send({eventCounts: eventCounts})
     })
   })
@@ -378,6 +382,7 @@ router.get('/event-history', (req, res, next) => {
           eventTypeWindows[eventTypeKey].windows.push(windowCounts[eventTypeKey])
         }
       }
+      client.close();
       res.status(200).send({eventTypeWindows: eventTypeWindows, firstDate: firstDate, lastDate: lastDate})
     })
   })
@@ -429,10 +434,12 @@ router.post('/game/_id/:_id/hide', (req, res, next) => {
       if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) {
          result.hidden = true;
-         collection.save(result)
+         collection.save(result).then(client.close)
          res.status(200).send({"hidden": result})
+      } else {
+        client.close();
+        res.status(404).send(result)
       }
-      else res.status(404).send(result)
     });
   });
 });
@@ -448,10 +455,12 @@ router.post('/game/_id/:_id/unhide', (req, res, next) => {
       if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) {
          result.hidden = false;
-         collection.save(result)
+         collection.save(result).then(client.close)
          res.status(200).send({"unhidden": result})
+      } else {
+        client.close();
+        res.status(404).send(result)
       }
-      else res.status(404).send(result)
     });
   });
 });
@@ -540,9 +549,10 @@ router.post('/authorize-token/', (req, res, next) => {
       users.findOne({userKey: userKey}).then(user => {
         if (!user.authorizedTrackers.includes(trackerIDHash)) {
           user.authorizedTrackers.push(trackerIDHash)
-          users.save(user)
+          users.save(user).then(client.close)
           res.status(200).send({"authorized" : trackerIDHash})
         } else {
+          client.close()
           res.status(200).send({"already_authorized": trackerIDHash})
         }
       })
