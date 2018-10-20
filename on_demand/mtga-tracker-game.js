@@ -69,7 +69,8 @@ const TWITCH_ISSUER = "https://id.twitch.tv/oauth2"
 const LOCAL_ISSUER = "https://inspector.mtgatracker.com"
 
 let userIsAdmin = (req, res, next) => {
-  if (req.user.user == "Spencatro") {
+  let { ADMIN_SUBJECTS } = req.webtaskContext.secrets;
+  if (ADMIN_SUBJECTS.split("|").includes(req.user.sub)) {
     next()
   } else {
     res.status(400).send({"error": "you are not an admin, sorry :'("})
