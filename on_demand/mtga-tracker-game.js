@@ -154,7 +154,7 @@ function attachUserKey(req, res, next) {
     req.userKey = `${req.user.sub}:discord`
     return next()
   }
-  res.status(400).send({"error": "cant_create_user_key"})
+  res.status(401).send({"error": "cant_create_user_key"})
 }
 
 // don't allow any $ operators as keys in any object anywhere in the body
