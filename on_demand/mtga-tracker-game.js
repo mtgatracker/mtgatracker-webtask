@@ -5,7 +5,7 @@ import express from 'express';
 import Webtask from 'webtask-tools';
 import { MongoClient, ObjectID } from 'mongodb';
 
-const ejwt = require('express-jwt');
+const ejwt = require('shawkinsl-express-jwt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 
@@ -42,6 +42,11 @@ const {
   twitchJWKExpressSecret,
   msanitize,
   assertStringOr400,
+  getRefreshTokenFromDB,
+  generateInternalToken,
+  doTokenRefresh,
+  verifyAndDecodeToken,
+  getOrCreateUser,
 } = require('../util')
 
 const BluebirdPromise = require('bluebird')
@@ -142,7 +147,7 @@ function attachTrackerID(req, res, next) {
 }
 
 function attachUserKey(req, res, next) {
-  if (req.user.iss == TWITCH_ISSUER) {
+  if (req.user.iss == LOCAL_ISSUER && req.user.proxyFor == "twitch") {
     req.userKey = `${req.user.sub}:twitch`
     return next()
   } else if (req.user.iss == LOCAL_ISSUER && req.user.proxyFor == "discord") {
@@ -168,12 +173,58 @@ function ejwt_wrapper(req, res, next) {
 }
 
 function user_ejwt_wrapper(req, res, next) {
-  return ejwt({secret: userSecretCallback, getToken: getCookieToken})
-    (req, res, next);
+  return ejwt({secret: userSecretCallback, getToken: getCookieToken})(req, res, next);
+}
+
+// we only hit this if the previous middleware threw an error
+function handle_ejwt_error(err, req, res, next) {
+
+  const {
+    MONGO_URL,
+    DATABASE,
+    TWITCH_CLIENT_ID,
+    TWITCH_SECRET_ID,
+    DISCORD_CLIENT_ID,
+    JWT_SECRET,
+    DISCORD_SECRET_ID
+  } = req.webtaskContext.secrets;
+
+  if (err.message == "jwt expired" && req.decoded) {
+    // we only refresh twitch ID tokens
+    console.log(req.decoded)
+
+    MongoClient.connect(MONGO_URL).then(dbClient => {
+      options = {
+        db: dbClient.db(DATABASE),
+        twitch_client_id: TWITCH_CLIENT_ID,
+        twitch_client_secret: TWITCH_SECRET_ID,
+        discord_client_id: DISCORD_CLIENT_ID,
+        discord_client_secret: DISCORD_SECRET_ID,
+        jwtSecret: JWT_SECRET,
+        userKey: `${req.decoded.sub}:${req.decoded.proxyFor}`,
+        username: req.decoded.preferred_username,
+        userId: req.decoded.sub,
+        issuer: req.decoded.proxyFor
+      }
+      getRefreshTokenFromDB(options)
+        .then(doTokenRefresh)
+        .then(options => generateInternalToken(options, req))
+        .then(getOrCreateUser)
+        .then(decodedObj => {
+          res.header("set-token", decodedObj.id_token)
+          return next()
+        }).catch(err => {
+          // TODO: clean this up a bit
+          return res.status(401).send({"refresh token error": err})
+        })
+    })
+  } else {
+    return next(err)
+  }
 }
 
 server.use('/public-api', mongoSanitize, publicAPI)
-server.use('/api', user_ejwt_wrapper, mongoSanitize, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
+server.use('/api', user_ejwt_wrapper, handle_ejwt_error, mongoSanitize, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
 server.use('/anon-api', ejwt_wrapper, mongoSanitize, anonAPI)
 server.use('/tracker-api', ejwt_wrapper, mongoSanitize, attachTrackerID, trackerAPI)
 server.use('/admin-api', user_ejwt_wrapper, mongoSanitize, attachUserKey, userIsAdmin, adminAPI)

@@ -107,16 +107,18 @@ router.post('/tracker-token/', (req, res, next) => {
 router.post('/twitch-auth-attempt', (req, res, next) => {
   console.log('/twitch-auth-attempt')
   let { code } = req.body;
-  let { MONGO_URL, TWITCH_CLIENT_ID, TWITCH_SECRET_ID, DATABASE } = req.webtaskContext.secrets
+  let { MONGO_URL, TWITCH_CLIENT_ID, TWITCH_SECRET_ID, DATABASE, JWT_SECRET } = req.webtaskContext.secrets
   MongoClient.connect(MONGO_URL).then(dbClient => {
     options = {
       db: dbClient.db(DATABASE),
       client_id: TWITCH_CLIENT_ID,
       client_secret: TWITCH_SECRET_ID,
+      jwtSecret: JWT_SECRET,
       accessCode: code
     }
     getTwitchIDToken(options)
       .then(verifyAndDecodeToken)
+      .then(generateInternalToken)
       .then(getOrCreateUser)
       .then(decodedObj => {
         res.status(200).send({token: decodedObj.id_token, decoded: decodedObj.decoded})
