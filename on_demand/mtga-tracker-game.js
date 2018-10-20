@@ -44,6 +44,7 @@ const {
   assertStringOr400,
   getRefreshTokenFromDB,
   generateInternalToken,
+  verifyAccessToken,
   doTokenRefresh,
   getOrCreateUser,
 } = require('../util')
@@ -207,6 +208,7 @@ function handle_ejwt_error(err, req, res, next) {
       }
       getRefreshTokenFromDB(options)
         .then(doTokenRefresh)
+        .then(verifyAccessToken)
         .then(options => generateInternalToken(options, req))
         .then(getOrCreateUser)
         .then(decodedObj => {
