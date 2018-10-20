@@ -23,7 +23,8 @@
     "request": "^2.85.0",
     "shawkinsl-express-jwt": "^5.3.2",
     "underscore": "^1.9.1",
-    "webtask-tools": "^3.4.0"
+    "webtask-tools": "^3.4.0",
+    "cryptiles": ">=4.1.2"
   },
   "devDependencies": {
     "asar": "^0.14.3",
