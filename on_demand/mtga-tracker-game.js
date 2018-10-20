@@ -45,7 +45,6 @@ const {
   getRefreshTokenFromDB,
   generateInternalToken,
   doTokenRefresh,
-  verifyAndDecodeToken,
   getOrCreateUser,
 } = require('../util')
 

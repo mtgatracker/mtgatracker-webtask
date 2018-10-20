@@ -19,7 +19,7 @@ const {
   verifyAndDecodeToken,
   getTwitchIDToken,
   getDiscordAccessToken,
-  verifyDiscordAccessToken,
+  verifyAccessToken,
   generateInternalToken,
   getOrCreateUser,
   msanitize,
@@ -117,7 +117,10 @@ router.post('/twitch-auth-attempt', (req, res, next) => {
       accessCode: code
     }
     getTwitchIDToken(options)
-      .then(verifyAndDecodeToken)
+      //.then(verifyAndDecodeToken)
+      //   not using ID tokens from twitch anymore:
+      //   https://discuss.dev.twitch.tv/t/id-token-missing-when-using-id-twitch-tv-oauth2-token-with-grant-type-refresh-token/18263
+      .then(verifyAccessToken)
       .then(generateInternalToken)
       .then(getOrCreateUser)
       .then(decodedObj => {
@@ -142,7 +145,7 @@ router.post('/discord-auth-attempt', (req, res, next) => {
       accessCode: code,
     }
     getDiscordAccessToken(options)
-      .then(verifyDiscordAccessToken)
+      .then(verifyAccessToken)
       // discord doesn't support openID tokens :( we have to make one ourselves
       .then(generateInternalToken)
       .then(getOrCreateUser)

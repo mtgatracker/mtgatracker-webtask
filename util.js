@@ -442,9 +442,7 @@ let getTwitchIDToken = (options) => {
 let verifyAndDecodeToken = (tokenObj) => {
   let { id_token, issuer } = tokenObj;
   return new Promise((resolve, reject) => {
-    // TODO: make this a bit more resilient to things like verifyAndDecodeKey(key, 'twithc') typos and such
     let keySet;
-    // TODO: this is only for twitch, remove this conditional
     if (issuer == "twitch") {
       keySet = twitchJWKClient;
     } else {
@@ -491,14 +489,22 @@ let getDiscordAccessToken = (options) => {
   })
 }
 
-let verifyDiscordAccessToken = (tokenObj) => {
+let verifyAccessToken = (tokenObj) => {
   return new Promise((resolve, reject) => {
     let { access_token, issuer } = tokenObj;
-    let discordUserUrl = "https://discordapp.com/api/users/@me"
+    let verifyUrl;
+    let authString;
+    if (tokenObj.issuer == "discord") {
+      verifyUrl = "https://discordapp.com/api/users/@me"
+      authString = `Bearer ${access_token}`
+    } else if (tokenObj.issuer == "twitch") {
+      verifyUrl = "https://id.twitch.tv/oauth2/validate"
+      authString = `OAuth ${access_token}`
+    }
     request.get({
-      url: discordUserUrl,
+      url: verifyUrl,
       headers: {
-        'Authorization': `Bearer ${access_token}`
+        'Authorization': authString
       },
       json: true
     }, (err, reqRes, data) => {
@@ -508,8 +514,13 @@ let verifyDiscordAccessToken = (tokenObj) => {
         return reject(new Error(`token refresh returned ${reqRes.status}`))
       } else {
         // set username and subject ID so we can generate a token
-        tokenObj.username = data.username
-        tokenObj.userId = data.id
+        if (tokenObj.issuer == "twitch") {
+          tokenObj.username = data.login
+          tokenObj.userId = data.user_id
+        } else if (tokenObj.issuer == "discord") {
+          tokenObj.username = data.username
+          tokenObj.userId = data.id
+        }
         return resolve(tokenObj)
       }
     })
@@ -597,11 +608,11 @@ module.exports = {
   createDeckFilter: createDeckFilter,
   notificationCollection: notificationCollection,
   verifyAndDecodeToken: verifyAndDecodeToken,
+  verifyAccessToken: verifyAccessToken,
   getRefreshTokenFromDB: getRefreshTokenFromDB,
   doTokenRefresh: doTokenRefresh,
   getTwitchIDToken: getTwitchIDToken,
   getDiscordAccessToken: getDiscordAccessToken,
-  verifyDiscordAccessToken: verifyDiscordAccessToken,
   generateInternalToken: generateInternalToken,
   getOrCreateUser: getOrCreateUser,
   twitchJWKExpressSecret: twitchJWKExpressSecret,
