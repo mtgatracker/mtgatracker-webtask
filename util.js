@@ -360,6 +360,57 @@ let buildUrl = (url, params) => {
   return url + "?" + Object.keys(params).map(key => key + "=" + params[key]).join("&")
 }
 
+let getRefreshTokenFromDB = (options) => {
+  return new Promise((resolve, reject) => {
+    let { db, userKey } = options;
+    let collection = db.collection(userCollection)
+    collection.findOne({userKey: userKey}, null).then(findResult => {
+      if (!findResult) return reject(new Error("no_user_found"))
+      let { refreshToken } = findResult
+      options.refresh_token = refreshToken
+      return resolve(options)
+    })
+  })
+}
+
+let doTokenRefresh = (options) => {
+  let rootUrl;
+  if (options.issuer == "twitch") {
+    options.client_secret = options.twitch_client_secret
+    options.client_id = options.twitch_client_id
+    rootUrl = "https://id.twitch.tv/oauth2/token"
+  } else if (options.issuer == "discord") {
+    options.client_secret = options.discord_client_secret
+    options.client_id = options.discord_client_id
+    rootUrl = "https://discordapp.com/api/oauth2/token"
+    options.scope = "identify"
+  }
+  let { client_id, client_secret, refresh_token, access_token } = options
+  return new Promise((resolve, reject) => {
+    let params = {
+      client_id: client_id,
+      client_secret: client_secret,
+      refresh_token: encodeURI(refresh_token),
+      grant_type: "refresh_token",
+      scope: "openid",
+    }
+    if (options.scope) params.scope = options.scope  // for discord only
+    let tokenURL = buildUrl(rootUrl, params)
+    request.post({
+      url: tokenURL,
+      json: true,
+      headers: {'User-Agent': 'MTGATracker-Webtask'}
+    }, (err, reqRes, data) => {
+      if (err) return reject(err)
+      if (reqRes.statusCode != 200) return reject(new Error(`token refresh returned ${reqRes.status}`))
+      options.access_token = data.access_token
+      options.refresh_token = data.refresh_token
+      return resolve(options)
+    })
+  })
+
+}
+
 let getTwitchIDToken = (options) => {
   let { client_id, client_secret, accessCode } = options
   // TODO: generalize this somehow (maybe getToken(req, issuer, accessCode) ? )
@@ -378,6 +429,7 @@ let getTwitchIDToken = (options) => {
       headers: {'User-Agent': 'MTGATracker-Webtask'}
     }, (err, reqRes, data) => {
       if (err) return reject(err)
+      if (reqRes.statusCode != 200) return reject(new Error(`token ID returned ${reqRes.status}`))
       options.id_token = data.id_token
       options.access_token = data.access_token
       options.refresh_token = data.refresh_token
@@ -390,9 +442,7 @@ let getTwitchIDToken = (options) => {
 let verifyAndDecodeToken = (tokenObj) => {
   let { id_token, issuer } = tokenObj;
   return new Promise((resolve, reject) => {
-    // TODO: make this a bit more resilient to things like verifyAndDecodeKey(key, 'twithc') typos and such
     let keySet;
-    // TODO: this is only for twitch, remove this conditional
     if (issuer == "twitch") {
       keySet = twitchJWKClient;
     } else {
@@ -402,7 +452,8 @@ let verifyAndDecodeToken = (tokenObj) => {
       if (err) {
         return reject(err)
       } else {
-        tokenObj.decoded = decoded;
+        tokenObj.username = decoded.preferred_username
+        tokenObj.userId = decoded.sub
         return resolve(tokenObj)
       }
     })
@@ -428,6 +479,7 @@ let getDiscordAccessToken = (options) => {
       headers: {'User-Agent': 'MTGATracker-Webtask'},
     }, (err, reqRes, data) => {
       if (err) return reject(err)
+      if (reqRes.statusCode != 200) return reject(new Error(`discord access token returned ${reqRes.status}`))
       options.id_token = data.id_token
       options.access_token = data.access_token
       options.refresh_token = data.refresh_token
@@ -437,34 +489,54 @@ let getDiscordAccessToken = (options) => {
   })
 }
 
-let verifyDiscordAccessToken = (tokenObj) => {
+let verifyAccessToken = (tokenObj) => {
   return new Promise((resolve, reject) => {
     let { access_token, issuer } = tokenObj;
-    let discordUserUrl = "https://discordapp.com/api/users/@me"
+    let verifyUrl;
+    let authString;
+    if (tokenObj.issuer == "discord") {
+      verifyUrl = "https://discordapp.com/api/users/@me"
+      authString = `Bearer ${access_token}`
+    } else if (tokenObj.issuer == "twitch") {
+      verifyUrl = "https://id.twitch.tv/oauth2/validate"
+      authString = `OAuth ${access_token}`
+    }
     request.get({
-      url: discordUserUrl,
+      url: verifyUrl,
       headers: {
-        'Authorization': `Bearer ${access_token}`
+        'Authorization': authString
       },
       json: true
     }, (err, reqRes, data) => {
-      if (err) {
+      if (err ) {
         return reject(err)
+      } else if (reqRes.statusCode != 200) {
+        return reject(new Error(`token refresh returned ${reqRes.status}`))
       } else {
-        tokenObj.discordUser = data
+        // set username and subject ID so we can generate a token
+        if (tokenObj.issuer == "twitch") {
+          tokenObj.username = data.login
+          tokenObj.userId = data.user_id
+        } else if (tokenObj.issuer == "discord") {
+          tokenObj.username = data.username
+          tokenObj.userId = data.id
+        }
         return resolve(tokenObj)
       }
     })
   })
 }
 
-let generateInternalToken = options => {
+let generateInternalToken = (options, req) => {
   return new Promise((resolve, reject) => {
-     options.decoded = {preferred_username: options.discordUser.username, sub: options.discordUser.id}
+     options.decoded = {preferred_username: options.username, sub: options.userId}
      if (options.issuer) {
        options.decoded.proxyFor = options.issuer;
+     } else if (options.proxyFor) {
+       options.decoded.proxyFor = options.proxyFor
      }
-     options.id_token = createToken(options.decoded, options.jwtSecret, "7d")
+     options.id_token = createToken(options.decoded, options.jwtSecret, "2 hours")
+     if (req) req.user = options.decoded;
      resolve(options)
   })
 }
@@ -480,6 +552,9 @@ let getOrCreateUser = options => {
     return collection.findOne({userKey: userKey}, null).then(findResult => {
       if (findResult) {
         options.user = findResult;
+        findResult.refreshToken = refresh_token
+        findResult.accessToken = access_token
+        collection.save(findResult)
         resolve(options)
       } else {
         // make a new result we can save
@@ -533,9 +608,11 @@ module.exports = {
   createDeckFilter: createDeckFilter,
   notificationCollection: notificationCollection,
   verifyAndDecodeToken: verifyAndDecodeToken,
+  verifyAccessToken: verifyAccessToken,
+  getRefreshTokenFromDB: getRefreshTokenFromDB,
+  doTokenRefresh: doTokenRefresh,
   getTwitchIDToken: getTwitchIDToken,
   getDiscordAccessToken: getDiscordAccessToken,
-  verifyDiscordAccessToken: verifyDiscordAccessToken,
   generateInternalToken: generateInternalToken,
   getOrCreateUser: getOrCreateUser,
   twitchJWKExpressSecret: twitchJWKExpressSecret,
