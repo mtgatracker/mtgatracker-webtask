@@ -177,6 +177,8 @@ function user_ejwt_wrapper(req, res, next) {
   return ejwt({secret: userSecretCallback, getToken: getCookieToken})(req, res, next);
 }
 
+
+
 // we only hit this if the previous middleware threw an error
 function handle_ejwt_error(err, req, res, next) {
 
@@ -224,6 +226,12 @@ function handle_ejwt_error(err, req, res, next) {
     return next(err)
   }
 }
+
+// ONLY allow set-token header
+server.use((req, res, next) => {
+  res.header("access-control-expose-headers", "set-token");
+  next()
+})
 
 server.use('/public-api', mongoSanitize, publicAPI)
 server.use('/api', user_ejwt_wrapper, handle_ejwt_error, mongoSanitize, attachUserKey, attachAuthorizedTrackers, userUpToDate, userAPI)
