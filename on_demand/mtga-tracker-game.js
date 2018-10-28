@@ -111,7 +111,7 @@ let attachAuthorizedTrackers = (req, res, next) => {
     users.findOne({userKey: userKey}).then(user => {
       if (!user) return res.status(400).send({"error": "no_user_found"})
       else if (user.authorizedTrackers.length == 0 && req.path != "/authorize-token") {
-        return res.status(400).send({"error": "no records"})
+        return res.status(400).send({"error": "no authed trackers"})
       }
       else if (user.authorizedTrackers) {
         req.authorizedTrackers = user.authorizedTrackers;
