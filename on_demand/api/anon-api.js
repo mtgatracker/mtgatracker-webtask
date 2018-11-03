@@ -211,6 +211,51 @@ router.get('/speeds', (req, res, next) => {
 })
 
 
+// covered: test_speeds
+router.get('/kpis/', (req, res, next) => {
+  console.log("/kpis")
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+
+  let weekMs = 63 * 24 * 60 * 60 * 1000;
+  let weekAgo = new Date()
+  weekAgo.setTime(weekAgo.getTime() - weekMs)
+
+  MongoClient.connect(MONGO_URL, (connectErr, client) => {
+    if (connectErr) return next(connectErr);
+
+    let collection = client.db(DATABASE).collection(gameCollection)
+
+    let aggregation = [
+      {$match: {date: {$gt: weekAgo}}},
+      {$group:
+        {
+          _id: {
+              year: {$year:"$date"},
+              month: {$month:"$date"},
+              day: {$dayOfMonth:"$date"},
+              // hero: "$hero", // TODO: this makes the aggergation result EXPLODE
+          },
+          heroes: { $addToSet: '$hero'},
+          games: {$sum: 1}
+        },
+      },
+      {$sort:{"_id.year": 1, "_id.month": 1, "_id.day": 1}},
+    ]
+
+    collection.aggregate(aggregation).toArray((err, aggResult) => {
+      aggResult.forEach(result => {
+        result.heroes = result.heroes.length;
+        result.date = `${result._id.year}-${result._id.month}-${result._id.day}`
+        delete result._id;
+      })
+      aggResult.shift()
+      aggResult.pop()  // the first and last day are always less than 24h
+
+      client.close()
+      res.status(200).send({kpis: aggResult});
+    })
+  })
+})
 
 // covered: test_games_count
 router.get('/games/count', (req, res, next) => {
