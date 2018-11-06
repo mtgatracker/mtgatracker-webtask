@@ -315,6 +315,26 @@ router.get('/win-loss', (req, res, next) => {
   })
 })
 
+// TODO: uncovered
+router.get('/win-loss/by-event', (req, res, next) => {
+  console.log("/api/win-loss/by-event" + JSON.stringify(req.params))
+
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+
+  MongoClient.connect(MONGO_URL, (connectErr, client) => {
+    if (connectErr) return next(connectErr);
+    let games = client.db(DATABASE).collection(gameCollection)
+    filter = {trackerIDHash: {$in: req.authorizedTrackers}, eventID: {$exists: true}}
+
+    games.aggregate([
+      {$match: filter},
+      {$group: {"_id": {"eventID": "$eventID", "heroWon": {"$eq": ["$hero", "$winner"]}}, "count": {$sum:1}}}
+    ]).toArray((err, eventCounts) => {
+      client.close();
+      res.status(200).send({eventCounts: eventCounts})
+    })
+  })
+})
 
 // TODO: uncovered
 router.get('/event-breakdown', (req, res, next) => {
