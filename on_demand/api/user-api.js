@@ -331,7 +331,30 @@ router.get('/win-loss/by-event', (req, res, next) => {
       {$group: {"_id": {"eventID": "$eventID", "heroWon": {"$eq": ["$hero", "$winner"]}}, "count": {$sum:1}}}
     ]).toArray((err, eventCounts) => {
       client.close();
-      res.status(200).send({eventCounts: eventCounts})
+      let uniqueEventIDs = new Set(eventCounts.map(eventCount => eventCount._id.eventID))
+      let eventCountTotals = []
+
+      for (let eventID of uniqueEventIDs) {
+        let winObj = eventCounts.find(event => event._id.eventID == eventID && event._id.heroWon == true)
+        let wins = 0;
+        if (winObj) wins = winObj["count"]
+        let lossObj = eventCounts.find(event => event._id.eventID == eventID && event._id.heroWon == false)
+        let losses = 0;
+        if (lossObj) losses = lossObj["count"]
+        eventCountTotals.push({eventID: eventID, wins: wins, losses: losses})
+      }
+
+      console.log(eventCounts)
+      console.log(eventCountTotals)
+
+      eventCountTotals.sort((a,b) => {
+        let diff = (b.wins + b.losses) - (a.wins + a.losses)
+        if (diff == 0) diff = b.wins - a.wins
+        return diff
+      })
+
+
+      res.status(200).send({eventCounts: eventCountTotals})
     })
   })
 })
