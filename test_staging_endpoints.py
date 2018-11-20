@@ -812,34 +812,6 @@ def test_auth_request_expires(empty_game_collection, empty_user_collection):
     assert access_code != access_code_after100s
 
 
-@pytest.mark.cron
-@pytest.mark.slow
-def test_cron_fixes_hero_in_schema0(empty_game_collection, admin_token):
-    post_random_games(num_games=20, no_verify=True, game_shell=_game_shell_schema_0)  # need this to exclude hero
-    all_games = get_all_games_admin_page(admin_token, 1, 20)
-    for game in all_games["docs"]:
-        assert "hero" not in game.keys(), game.keys()
-    time.sleep(120)
-    game_current_first = get_game_by_id(all_games["docs"][0]["gameID"])
-    assert "hero" in game_current_first.keys()
-    game_current_last = get_game_by_id(all_games["docs"][-1]["gameID"])
-    assert "hero" in game_current_last.keys()
-
-
-@pytest.mark.cron
-@pytest.mark.slow
-def test_cron_fixes_opponent_in_schema0(empty_game_collection, admin_token):
-    post_random_games(num_games=20, no_verify=True, game_shell=_game_shell_schema_1_1_0_beta)
-    all_games = get_all_games_admin_page(admin_token, 1, 20)
-    for game in all_games["docs"]:
-        assert "opponent" not in game.keys(), game.keys()
-    time.sleep(120)
-    game_current_first = get_game_by_id(all_games["docs"][0]["gameID"])
-    assert "opponent" in game_current_first.keys()
-    game_current_last = get_game_by_id(all_games["docs"][-1]["gameID"])
-    assert "opponent" in game_current_last.keys()
-
-
 @pytest.mark.token
 @pytest.mark.auth
 def test_anon_api_not_accessible_without_token():

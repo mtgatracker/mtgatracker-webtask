@@ -23,6 +23,8 @@ const {
   assertStringOr400,
 } = require('../../util')
 
+import AWS from 'aws-sdk'
+
 var secrets; // babel makes it so we can't const this, I am pretty sure
 //try {
   secrets = require('../secrets.js')
@@ -450,6 +452,50 @@ router.get('/game/_id/:_id', (req, res, next) => {
 });
 
 // covered: test_get_game
+router.get('/game/_id/:_id/from_cold_storage', (req, res, next) => {
+
+  const { MONGO_URL, DATABASE, S3_USER, S3_ACCESS_KEY, S3_ACCESS_KEY_ID, S3_BUCKET } = req.webtaskContext.secrets;
+
+  AWS.config.update({
+    accessKeyId: S3_ACCESS_KEY_ID,
+    secretAccessKey: S3_ACCESS_KEY
+  });
+
+  let s3 = new AWS.S3();
+
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
+    if (err) return next(err);
+    client.db(DATABASE).collection(gameCollection).findOne({ _id: new ObjectID(_id)}, (err, result) => {
+      client.close();
+      if (err) return next(err);
+      cleanGameRecord(req.authorizedTrackers, result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) return res.status(401).send({"error": "not authorized"})
+      if (!result.inColdStorage) return res.status(400).send({"error": "record not in cold storage"})
+
+      let testFileParams = {
+        Bucket: S3_BUCKET,
+        Key: result.inColdStorage
+      }
+      console.log(testFileParams)
+      s3.getObject(testFileParams, (err, data) => {
+        if (err) return res.status(400).send({"error": `during retrieval of ${result.inColdStorage}: ${err.message}`})
+        let dataString = data.Body.toString()
+        let csObj = JSON.parse(dataString)
+
+        if (result.trackerIDHash != csObj.owner) return res.status(401).send({"error": "not_authorized"})
+        cleanGameRecords(req.authorizedTrackers, csObj.records)
+
+        if (csObj !== null) return res.status(200).send(csObj)
+        else return res.status(404).send({"error": "not found"})
+      })
+
+    });
+  });
+});
+
+// covered: test_get_game
 router.get('/game/gameID/:gid', (req, res, next) => {
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   MongoClient.connect(MONGO_URL, (err, client) => {
@@ -462,6 +508,48 @@ router.get('/game/gameID/:gid', (req, res, next) => {
       if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
       if (result !== null) res.status(200).send(result)
       else res.status(404).send(result)
+    });
+  });
+});
+
+router.post('/game/_id/:_id/make_permanent', (req, res, next) => {
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    let collection = client.db(DATABASE).collection(gameCollection)
+    collection.findOne({ _id: new ObjectID(_id)}, (err, result) => {
+      if (err) return next(err);
+      cleanGameRecord(req.authorizedTrackers, result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
+      if (result !== null) {
+         result.permanent = true;
+         collection.save(result).then(client.close)
+         res.status(200).send({"permanent": result})
+      } else {
+        client.close();
+        res.status(404).send(result)
+      }
+    });
+  });
+});
+
+router.post('/game/_id/:_id/make_impermanent', (req, res, next) => {
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    let collection = client.db(DATABASE).collection(gameCollection)
+    collection.findOne({ _id: new ObjectID(_id)}, (err, result) => {
+      if (err) return next(err);
+      cleanGameRecord(req.authorizedTrackers, result)
+      if (!req.authorizedTrackers.includes(result.trackerIDHash)) res.status(401).send({"error": "not authorized"})
+      if (result !== null) {
+         result.permanent = false;
+         collection.save(result).then(client.close)
+         res.status(200).send({"impermanent": result})
+      } else {
+        client.close();
+        res.status(404).send(result)
+      }
     });
   });
 });

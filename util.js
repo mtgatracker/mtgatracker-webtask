@@ -78,6 +78,7 @@ var downloadCount = null;
 
 const deckCollection = 'deck',
       gameCollection = 'game',
+      feedbackCollection = 'feedback',
       draftCollection = 'draft',
       inventoryCollection = 'inventory',
       collectionCollection = 'collection',
@@ -598,6 +599,7 @@ module.exports = {
   routeDoc: routeDoc,
   deckCollection: deckCollection,
   gameCollection: gameCollection,
+  feedbackCollection: feedbackCollection,
   userCollection: userCollection,
   trackerCollection: trackerCollection,
   errorCollection: errorCollection,

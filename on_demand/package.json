@@ -10,6 +10,7 @@
   "keywords": [],
   "author": "shawkins",
   "dependencies": {
+    "aws-sdk": "^2.353.0",
     "@iopipe/iopipe": "^1.8.0",
     "@iopipe/logger": "^1.0.0",
     "backbone": "1.3.2",
