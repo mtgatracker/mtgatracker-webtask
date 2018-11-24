@@ -16,7 +16,6 @@ const {
   routeDoc,
   sendDiscordMessage,
   gameCollection,
-  feedbackCollection,
   deckCollection,
   draftCollection,
   inventoryCollection,
@@ -316,25 +315,6 @@ router.post('/rankChange', (req, res, next) => {
       res.status(200).send(result)
       client.close()
     })
-  })
-});
-
-router.post('/feedback', (req, res, next) => {
-  console.log("POST /feedback")
-  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-  const model = req.body;
-
-  MongoClient.connect(MONGO_URL, (err, client) => {
-    if (err) return next(err);
-    //client, database, username, createIfDoesntExist, isUser
-    let collection = client.db(DATABASE).collection(feedbackCollection)
-
-    if (assertStringOr400(model.playerId, res)) return;
-    if (assertStringOr400(req.user.trackerIDHash, res)) return;
-    if (assertStringOr400(model.feedbackText, res)) return;
-    if (assertStringOr400(model.contactInfo, res)) return;
-
-    collection.insert(model)
   })
 });
 
