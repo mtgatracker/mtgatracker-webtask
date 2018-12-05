@@ -195,12 +195,13 @@ router.post('/feedback', (req, res, next) => {
     //client, database, username, createIfDoesntExist, isUser
     let collection = client.db(DATABASE).collection(feedbackCollection)
 
-    if (assertStringOr400(model.playerId, res)) return;
-    if (assertStringOr400(req.user.trackerIDHash, res)) return;
     if (assertStringOr400(model.feedbackText, res)) return;
+    if (assertStringOr400(model.feedbackType, res)) return;
     if (assertStringOr400(model.contactInfo, res)) return;
 
-    collection.insert(model)
+    collection.insert(model).then(r => {
+      res.status(200).send({"feedback": "acquired"})
+    })
   })
 });
 

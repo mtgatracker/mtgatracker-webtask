@@ -5,9 +5,15 @@ const express = require('express'),
 const { MongoClient, ObjectID } = require('mongodb');
 const _ = require("underscore")
 
+import AWS from 'aws-sdk'
+const crypto = require("crypto")
+
 const {
   createAnonymousToken,
   createToken,
+  cleanGameRecord,
+  cleanGameRecords,
+  cleanDraftRecords,
   clientVersionUpToDate,
   getGameById,
   DraftPick,
@@ -37,80 +43,22 @@ router.get('/', (req, res, next) => {
 
 router.post("/draft-pick", (req, res, next) => {
   console.log("POST /draft-pick")
-  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-  const model = req.body;
-  let hero = model.hero;
-  let draftID = model.draftID;
-  let trackerIDHash = model.trackerIDHash;
-
-  let draftPick = new DraftPick(model)
-  if (!draftPick.isValid()) {
-    res.status(400).send({error: draftPick.validationError})
-    return;
-  }
-  delete model.hero;
-  delete model.draftID;
-  delete model.trackerIDHash;
-
-  MongoClient.connect(MONGO_URL, (err, client) => {
-    if (err) return next(err);
-
-    if (assertStringOr400(hero, res)) return;
-    if (assertStringOr400(draftID, res)) return;
-    if (assertStringOr400(trackerIDHash, res)) return;
-
-    client.db(DATABASE).collection(draftCollection)
-      .find({hero: hero, draftID: draftID, trackerIDHash: trackerIDHash})
-      .sort({date: -1}).limit(1)
-      .next((err, draftObj) => {
-        // decide if we should use existing, or create new object
-        let lastPick = {packNumber: 1000, pickNumber: 1000}; // if no object to pull, feed fake data that will fail
-        if (draftObj && draftObj.picks) lastPick = draftObj.picks[draftObj.picks.length - 1]
-        let fitsExistingDraft = draftObj &&
-          (
-            lastPick.packNumber < model.packNumber ||
-              (
-                lastPick.packNumber == model.packNumber &&
-                lastPick.pickNumber < model.pickNumber
-              )
-          )
-        if (fitsExistingDraft) {
-          draftObj.picks.push(model)
-
-          client.db(DATABASE).collection(draftCollection).save(draftObj, (err, result) => {
-            client.close();
-            res.status(201).send(result);
-          })
-        } else {
-          if (lastPick.packNumber == model.packNumber &&
-              lastPick.pickNumber == model.pickNumber &&
-              lastPick.pack == model.pack) {
-                console.log("draft object is the same as the last pick! discarding")
-                client.close();
-                res.status(304).send(lastPick);
-          } else {
-            draftObj = {
-              date: new Date(),
-              picks: [model],
-              hero: hero,
-              draftID: draftID,
-              trackerIDHash: trackerIDHash,
-            }
-            client.db(DATABASE).collection(draftCollection).insertOne(draftObj, (err, result) => {
-              client.close();
-              res.status(201).send(result);
-            })
-          }
-        }
-    })
-  })
+  res.status(501).send({"error": "please update MTGATracker to >= 5.0.0"})
 })
 
-// covered: test_post_game
 router.post('/game', (req, res, next) => {
   console.log("POST /game")
-  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
   const model = req.body;
+
+  let anonymousUserID;
+  if (model.anonymousUserID) {
+    anonymousUserID = model.anonymousUserID;
+  } else if (model.players && model.players[0] && model.players[0].name) {
+    anonymousUserID = crypto.createHash('md5').update(model.players[0].name).digest("hex")
+  } else {
+    console.log(model)
+    return res.status(400).send({"invalid": "model"})
+  }
 
   if (model.date === undefined) {
     model.date = new Date()
@@ -118,204 +66,178 @@ router.post('/game', (req, res, next) => {
     model.date = new Date(Date.parse(model.date))
   }
 
-  if (model.anonymousUserID) {
-    let cleanModel = {
-      date: model.date,
-      anonymousUserID: model.anonymousUserID
-    } // in case someone tries to sneak junk in this way, filter it out
-    MongoClient.connect(MONGO_URL, (err, client) => {
+  let cleanModel = {
+    date: model.date,
+    anonymousUserID: anonymousUserID,
+    client_version: model.client_version,
+  } // in case someone tries to sneak junk in this way, filter it out
+
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    if (model.gameID) {
+      cleanModel.gameID = crypto.createHash('md5').update(model.gameID).digest("hex")
+      getGameById(client, DATABASE, model.gameID, (result, err) => {
+        if (result !== null) {
+          res.status(400).send({error: "game already exists", game: result});
+          return;
+        }
+        if (err) return next(err);
+        client.db(DATABASE).collection(gameCollection).insertOne(cleanModel, (err, result) => {
+          client.close();
+          if (err) return next(err);
+          res.status(501).send({"error": "please update MTGATracker to >= 5.0.0"});
+          return
+        })
+      })
+    } else {
       if (err) return next(err);
       client.db(DATABASE).collection(gameCollection).insertOne(cleanModel, (err, result) => {
         client.close();
         if (err) return next(err);
-        res.status(201).send(result);
+        res.status(501).send({"error": "please update MTGATracker to >= 5.0.0"});
         return
       })
-    })
-  } else {
-    let game = new Game(model)
-    if (!game.isValid()) {
-      res.status(400).send({error: game.validationError})
-      return;
     }
+  })
 
-    clientVersionUpToDate(model.client_version, req.webtaskContext.storage).then((clientVersionCheck) => {
-      model.clientVersionOK = clientVersionCheck.ok
-      model.latestVersionAtPost = clientVersionCheck.latest
-      model.trackerAuthed = true
-      model.trackerIDHash = req.user.trackerIDHash
-
-      if (model.hero === undefined || model.opponent === undefined) {
-        if (model.players[0].deck.poolName.includes("visible cards") && !model.players[1].deck.poolName.includes("visible cards")) {
-          model.hero = model.players[1].name
-          model.opponent = model.players[0].name
-        } else if (model.players[1].deck.poolName.includes("visible cards") && !model.players[0].deck.poolName.includes("visible cards")) {
-          model.hero = model.players[0].name
-          model.opponent = model.players[1].name
-        } else {
-          res.status(400).send({error: "invalid schema", game: result});
-          return;
-        }
-      }
-
-      if (!model.elapsedTimeSeconds) {
-        let totalSeconds = 0.0;
-        let timeSplit = model.elapsedTime.split(":")
-        totalSeconds += parseInt(timeSplit[0]) * 60 * 60;
-        totalSeconds += parseInt(timeSplit[1]) * 60;
-        totalSeconds += parseFloat(timeSplit[2]);
-        model.elapsedTimeSeconds = totalSeconds;
-      }
-
-      for (let player of model.players) {
-        if (!player.timeSpentSeconds) {
-          player.timeSpentSeconds = 0.0;
-          let playerTimeSplit = player.timeSpent.split(":")
-          player.timeSpentSeconds += parseInt(playerTimeSplit[0]) * 60 * 60;
-          player.timeSpentSeconds += parseInt(playerTimeSplit[1]) * 60;
-          player.timeSpentSeconds += parseFloat(playerTimeSplit[2]);
-        }
-      }
-
-      MongoClient.connect(MONGO_URL, (err, client) => {
-        if (err) return next(err);
-        //client, database, username, createIfDoesntExist, isUser
-        getGameById(client, DATABASE, game.get("gameID"), (result, err) => {
-          if (result !== null) {
-            res.status(400).send({error: "game already exists", game: result});
-            return;
-          }
-          client.db(DATABASE).collection(gameCollection).insertOne(model, (err, result) => {
-
-            if(assertStringOr400(model.hero, res)) return;
-            if(assertStringOr400(model.players[0].deck.deckID, res)) return;
-            if(assertStringOr400(model.trackerIDHash, res)) return;
-
-            let deckQuery = msanitize({owner: model.hero, deckID: model.players[0].deck.deckID, trackerIDHash: model.trackerIDHash})
-            client.db(DATABASE).collection(deckCollection).find(deckQuery).limit(1).next((err, result) => {
-              if (err) return next(err);
-              if (result == null) { // new deck, we need to make the record
-                result = {
-                  owner: model.hero,
-                  deckID: model.players[0].deck.deckID,
-                  deckName: model.players[0].deck.poolName,
-                  wins: [],
-                  losses: [],
-                  trackerIDHash: model.trackerIDHash
-                }
-              }
-              result.deckName = model.players[0].deck.poolName  // get the latest name
-              if (model.winner == model.hero) {
-                result.wins.push(model.gameID)
-              } else {
-                result.losses.push(model.gameID)
-              }
-              client.db(DATABASE).collection(deckCollection).save(result)
-              client.close();
-              res.status(201).send(result);
-            })
-          });
-        })
-      });
-    })
-  }
+  res.status(501).send({"error": "please update MTGATracker to >= 5.0.0"})
 });
 
 
 // TODO: uncovered
 router.post('/inventory', (req, res, next) => {
   console.log("POST /inventory")
-  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-  const model = req.body;
-
-  MongoClient.connect(MONGO_URL, (err, client) => {
-    let collection = client.db(DATABASE).collection(inventoryCollection)
-
-    // before we add a date, test if the object returns a document when used as a query
-    // if so, we should do nothing
-    delete model.log_line;
-    delete model.block_title_sequence;
-    delete model.request_or_response;
-    delete model.block_title;
-
-    let queryPromises = [];
-    let queries = [];
-
-    let insertPromises = [];
-    let inserted = [];
-
-    if (assertStringOr400(model.playerId, res)) return;
-    if (assertStringOr400(req.user.trackerIDHash, res)) return;
-
-    Object.keys(model).forEach(key => {
-      if (key != "playerId") {
-        if (assertStringOr400(key, res)) return;
-        queries.push(key)
-        queryPromises.push(collection.find({playerId: model.playerId, type: key, trackerIDHash: req.user.trackerIDHash}).sort({date: -1}).limit(1).next())
-      }
-    })
-    Promise.all(queryPromises).then(qPromiseResults => {
-      for (let i = 0; i < queries.length; i++) {
-        let key = queries[i]
-        let result = qPromiseResults[i]
-        let modelForKey = {"type": key, "value": model[key], "playerId": model.playerId, trackerIDHash: req.user.trackerIDHash}
-
-        // incoming model won't have these fields
-        // we're not using result again, so we can edit the obj directly
-        if (result) {
-          delete result._id;
-          delete result.date;
-        }
-        if (!_.isEqual(result, modelForKey)) {
-          modelForKey.date = new Date();
-          insertPromises.push(collection.insertOne(modelForKey))
-          inserted.push(key)
-        }
-      }
-      if (insertPromises) {
-        Promise.all(insertPromises).then(promiseRes => {
-          client.close();
-          if (err) return next(err);
-          res.status(201).send({"inserted": inserted});
-        })
-      } else {
-        res.sendStatus(202)
-      }
-    })
-  });
+  res.status(501).send({"error": "please update MTGATracker to >= 5.0.0"})
 });
 
 router.post('/rankChange', (req, res, next) => {
   console.log("POST /rankChange")
+  res.status(501).send({"error": "please update MTGATracker to >= 5.0.0"})
+});
+
+router.get('/games', (req, res, next) => {
+  console.log("/tracker-api/games" + JSON.stringify(req.params))
+  const { trackerIDHash } = req.user;
+
+  if (assertStringOr400(trackerIDHash, res)) return;
+
+  const addFilter = Object.assign({trackerIDHash: trackerIDHash})
+
+  console.log(`=========================> using filter ${JSON.stringify(addFilter)}`)
+
   const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
-  const model = req.body;
 
-  MongoClient.connect(MONGO_URL, (err, client) => {
-    if (err) return next(err);
-    //client, database, username, createIfDoesntExist, isUser
+  MongoClient.connect(MONGO_URL, (connectErr, client) => {
+    if (connectErr) return next(connectErr);
+    client.db(DATABASE).collection("migrated").insert({trackerIDHash: trackerIDHash, date: new Date()})
     let collection = client.db(DATABASE).collection(gameCollection)
-
-    if (assertStringOr400(model.playerId, res)) return;
-    if (assertStringOr400(req.user.trackerIDHash, res)) return;
-
-    let gameSearch = {"players.0.userID": model.playerId, trackerIDHash: req.user.trackerIDHash}
-
-    let cursor = collection.find(gameSearch).sort({date: -1}).limit(1).next((err, result) => {
-      if (err) return next(err);
-      if (result == null) {
-        res.status(400).send({error: "no game found", game: result});
-        return;
-      }
-      if (result.rankChange) {
-        res.status(400).send({error: "game already has rank", game: result});
-        return;
-      }
-      result.rankChange = model;
-      collection.save(result)
-      res.status(200).send(result)
-      client.close()
+    let cursor = collection.find(addFilter).sort({date: -1});
+    cursor.count(null, null, (err, count) => {
+      cursor.toArray((cursorErr, docs) => {
+        cleanGameRecords([trackerIDHash], docs)
+        if (cursorErr) return next(cursorErr);
+        res.status(200).send({
+          docs: docs
+        });
+        client.close()
+      })
     })
   })
+})
+
+router.get('/game/_id/:_id/from_cold_storage', (req, res, next) => {
+
+  const { MONGO_URL, DATABASE, S3_USER, S3_ACCESS_KEY, S3_ACCESS_KEY_ID, S3_BUCKET } = req.webtaskContext.secrets;
+  const { trackerIDHash } = req.user;
+
+  if (assertStringOr400(trackerIDHash, res)) return;
+
+  AWS.config.update({
+    accessKeyId: S3_ACCESS_KEY_ID,
+    secretAccessKey: S3_ACCESS_KEY
+  });
+
+  let s3 = new AWS.S3();
+
+  MongoClient.connect(MONGO_URL, (err, client) => {
+    const { _id } = req.params;
+    if (assertStringOr400(_id, res)) return;
+    if (err) return next(err);
+    client.db(DATABASE).collection(gameCollection).findOne({ _id: new ObjectID(_id)}, (err, result) => {
+      client.close();
+      if (err) return next(err);
+      cleanGameRecord([trackerIDHash], result)
+      if (trackerIDHash != result.trackerIDHash) return res.status(401).send({"error": "not authorized"})
+      if (!result.inColdStorage) return res.status(400).send({"error": "record not in cold storage"})
+
+      let testFileParams = {
+        Bucket: S3_BUCKET,
+        Key: result.inColdStorage
+      }
+      console.log(testFileParams)
+      s3.getObject(testFileParams, (err, data) => {
+        if (err) return res.status(400).send({"error": `during retrieval of ${result.inColdStorage}: ${err.message}`})
+        let dataString = data.Body.toString()
+        let csObj = JSON.parse(dataString)
+
+        if (result.trackerIDHash != csObj.owner) return res.status(401).send({"error": "not_authorized"})
+        cleanGameRecords([trackerIDHash], csObj.records)
+
+        if (csObj !== null) return res.status(200).send(csObj)
+        else return res.status(404).send({"error": "not found"})
+      })
+
+    });
+  });
 });
+
+router.get('/drafts', (req, res, next) => {
+  console.log("/api/drafts" + JSON.stringify(req.params))
+  const { trackerIDHash } = req.user;
+
+  if (assertStringOr400(trackerIDHash, res)) return;
+
+  if (req.query.per_page) {
+    var per_page = parseInt(req.query.per_page)
+  } else {
+    var per_page = 10;
+  }
+  const { page = 1 } = req.query;
+
+  // TODO: see /games/ and add a similar draftFilter
+
+  // authorizedTrackers is safe
+  const addFilter = {trackerIDHash: trackerIDHash}
+
+  console.log(`=========================> using filter ${JSON.stringify(addFilter)}`)
+
+  const { MONGO_URL, DATABASE } = req.webtaskContext.secrets;
+
+  MongoClient.connect(MONGO_URL, (connectErr, client) => {
+    if (connectErr) return next(connectErr);
+    let collection = client.db(DATABASE).collection(draftCollection)
+    let cursor = collection.find(addFilter).sort({date: -1});
+    cursor.count(null, null, (err, count) => {
+      let numPages = Math.ceil(count / per_page);
+      let docCursor = cursor.skip((page - 1) * per_page)
+
+      if (per_page != -1) {
+        docCursor = docCursor.limit(per_page);
+      }
+
+      docCursor.toArray((cursorErr, docs) => {
+        cleanDraftRecords(docs)
+        if (cursorErr) return next(cursorErr);
+        res.status(200).send({
+          totalPages: numPages,
+          page: page,
+          docs: docs
+        });
+        client.close()
+      })
+    })
+  })
+})
 
 module.exports = router

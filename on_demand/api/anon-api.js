@@ -242,17 +242,38 @@ router.get('/kpis/', (req, res, next) => {
       {$sort:{"_id.year": 1, "_id.month": 1, "_id.day": 1}},
     ]
 
-    collection.aggregate(aggregation).toArray((err, aggResult) => {
-      aggResult.forEach(result => {
-        result.heroes = result.heroes.length;
-        result.date = `${result._id.year}-${result._id.month}-${result._id.day}`
-        delete result._id;
-      })
-      aggResult.shift()
-      aggResult.pop()  // the first and last day are always less than 24h
+    let anonAggregation = [
+      {$match: {date: {$gt: weekAgo}}},
+      {$group:
+        {
+          _id: {
+              year: {$year:"$date"},
+              month: {$month:"$date"},
+              day: {$dayOfMonth:"$date"},
+              // hero: "$hero", // TODO: this makes the aggergation result EXPLODE
+          },
+          anons: { $addToSet: '$anonymousUserID'},
+          games: {$sum: 1}
+        },
+      },
+      {$sort:{"_id.year": 1, "_id.month": 1, "_id.day": 1}},
+    ]
 
-      client.close()
-      res.status(200).send({kpis: aggResult});
+    collection.aggregate(aggregation).toArray((err, aggResult) => {
+      collection.aggregate(anonAggregation).toArray((err, anonAggResult) => {
+        for (let idx in aggResult) {
+          result = aggResult[idx]
+          anonResult = anonAggResult[idx]
+          result.heroes = result.heroes.length + anonResult.anons.length;
+          result.date = `${result._id.year}-${result._id.month}-${result._id.day}`
+          delete result._id;
+        }
+        aggResult.shift()
+        aggResult.pop()  // the first and last day are always less than 24h
+
+        client.close()
+        res.status(200).send({kpis: aggResult});
+      })
     })
   })
 })
@@ -331,17 +352,35 @@ router.post('/game', (req, res, next) => {
 
   let cleanModel = {
     date: model.date,
-    anonymousUserID: anonymousUserID
+    anonymousUserID: anonymousUserID,
+    client_version: model.client_version,
   } // in case someone tries to sneak junk in this way, filter it out
 
   MongoClient.connect(MONGO_URL, (err, client) => {
-    if (err) return next(err);
-    client.db(DATABASE).collection(gameCollection).insertOne(cleanModel, (err, result) => {
-      client.close();
+    if (model.gameID) {
+      cleanModel.gameID = model.gameID;
+      getGameById(client, DATABASE, model.gameID, (result, err) => {
+        if (result !== null) {
+          res.status(400).send({error: "game already exists", game: result});
+          return;
+        }
+        if (err) return next(err);
+        client.db(DATABASE).collection(gameCollection).insertOne(cleanModel, (err, result) => {
+          client.close();
+          if (err) return next(err);
+          res.status(201).send(result);
+          return
+        })
+      })
+    } else {
       if (err) return next(err);
-      res.status(201).send(result);
-      return
-    })
+      client.db(DATABASE).collection(gameCollection).insertOne(cleanModel, (err, result) => {
+        client.close();
+        if (err) return next(err);
+        res.status(201).send(result);
+        return
+      })
+    }
   })
 });
 
